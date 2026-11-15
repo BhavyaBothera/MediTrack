@@ -30,7 +30,12 @@ export class DoseService {
           food_timing,
           prescribing_doctor_name,
           additional_instructions,
-          status
+          status,
+          medicine_inventory (
+            current_stock,
+            low_stock_threshold,
+            unit_name
+          )
         )
       `)
       .eq('patient_id', patientId)
@@ -77,7 +82,7 @@ export class DoseService {
     const previousStatus = dose.status;
     const now = new Date().toISOString();
 
-    // 2. Update dose status in Supabase
+    // 2. Atomic state transition: only transition if status is NOT already 'taken'
     const { data: updatedDose, error: updateErr } = await supabaseAdmin
       .from('scheduled_doses')
       .update({
@@ -87,11 +92,22 @@ export class DoseService {
         late_confirmation_notified: dose.caretaker_alert_sent ? true : dose.late_confirmation_notified,
       })
       .eq('id', doseId)
+      .neq('status', 'taken')
       .select('*, medicines (*)')
-      .single();
+      .maybeSingle();
 
-    if (updateErr || !updatedDose) {
+    if (updateErr) {
       throw new Error(`Failed to confirm dose: ${updateErr?.message}`);
+    }
+
+    if (!updatedDose) {
+      console.log(`[DoseService] Concurrent request: Dose ${doseId} was already transitioned to taken by competing thread.`);
+      const { data: currentDose } = await supabaseAdmin
+        .from('scheduled_doses')
+        .select('*, medicines (*)')
+        .eq('id', doseId)
+        .single();
+      return currentDose || dose;
     }
 
     // 3. Log event in medication_logs

@@ -15,7 +15,8 @@
     "test:uat": "ts-node src/scripts/test-uat.ts",
     "test:browser": "ts-node src/scripts/test-browser-e2e.ts",
     "test:concurrency": "ts-node src/scripts/test-concurrency.ts",
-    "test": "ts-node src/scripts/test-scheduler.ts && ts-node src/scripts/test-e2e.ts && ts-node src/scripts/test-uat.ts && ts-node src/scripts/test-concurrency.ts"
+    "test:api-concurrency": "ts-node src/scripts/test-api-concurrency.ts",
+    "test": "ts-node src/scripts/test-scheduler.ts && ts-node src/scripts/test-e2e.ts && ts-node src/scripts/test-uat.ts && ts-node src/scripts/test-concurrency.ts && ts-node src/scripts/test-api-concurrency.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.48.1",

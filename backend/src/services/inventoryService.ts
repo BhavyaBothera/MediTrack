@@ -67,7 +67,45 @@ export class InventoryService {
     }
 
     const qty = dose.dose_quantity || 1;
-    const newStock = Math.max(0, Number(inventory.current_stock) - Number(qty));
+    let actualDeduction = 0;
+    let balanceAfter = Math.max(0, Number(inventory.current_stock));
+
+    if (Number(inventory.current_stock) >= qty) {
+      const calculatedNewStock = Number(inventory.current_stock) - qty;
+      const isLowStock = calculatedNewStock <= Number(inventory.low_stock_threshold);
+
+      // Atomic conditional update at database level (optimistic lock on stock level)
+      const { data: updatedRows, error: updateError } = await supabaseAdmin
+        .from('medicine_inventory')
+        .update({
+          current_stock: calculatedNewStock,
+          low_stock_alert_sent: isLowStock ? true : inventory.low_stock_alert_sent,
+        })
+        .eq('id', inventory.id)
+        .gte('current_stock', qty)
+        .select('*');
+
+      if (updatedRows && updatedRows.length > 0) {
+        // Successfully deducted this unit
+        actualDeduction = qty;
+        balanceAfter = calculatedNewStock;
+
+        // If stock reached low threshold, trigger notification
+        if (isLowStock && !inventory.low_stock_alert_sent) {
+          await this.triggerLowStockAlert(dose.patient_id, dose.medicine_id, calculatedNewStock, inventory.unit_name);
+        }
+      } else {
+        // Concurrent dose won the race and took the remaining stock
+        console.warn(`[Inventory] Race condition handled: Last unit taken by concurrent dose. Medicine ${dose.medicine_id} stock depleted.`);
+        actualDeduction = 0;
+        balanceAfter = 0;
+      }
+    } else {
+      // Stock was already zero when dose was confirmed
+      console.warn(`[Inventory] Medicine ${dose.medicine_id} is out of stock (0 remaining). Dose recorded with 0 inventory deduction.`);
+      actualDeduction = 0;
+      balanceAfter = 0;
+    }
 
     // 3. Insert transaction log with unique idempotency key
     const { error: txError } = await supabaseAdmin
@@ -77,10 +115,12 @@ export class InventoryService {
         medicine_id: dose.medicine_id,
         patient_id: dose.patient_id,
         transaction_type: 'dose_deduction',
-        quantity_change: -qty,
-        balance_after: newStock,
+        quantity_change: -actualDeduction,
+        balance_after: balanceAfter,
         dose_id: dose.id,
-        reference_note: `Dose confirmed for ${dose.scheduled_date} at ${dose.scheduled_time}`,
+        reference_note: actualDeduction > 0
+          ? `Dose confirmed for ${dose.scheduled_date} at ${dose.scheduled_time}`
+          : `Dose confirmed while stock was exhausted (0 units on hand)`,
         idempotency_key: idempotencyKey,
         performed_by: performedBy,
       });
@@ -92,21 +132,6 @@ export class InventoryService {
       }
       console.error('[Inventory] Error recording transaction:', txError);
       return false;
-    }
-
-    // 4. Update inventory stock
-    const isLowStock = newStock <= Number(inventory.low_stock_threshold);
-    await supabaseAdmin
-      .from('medicine_inventory')
-      .update({
-        current_stock: newStock,
-        low_stock_alert_sent: isLowStock ? true : inventory.low_stock_alert_sent,
-      })
-      .eq('id', inventory.id);
-
-    // 5. If stock reached low threshold, trigger notification
-    if (isLowStock && !inventory.low_stock_alert_sent) {
-      await this.triggerLowStockAlert(dose.patient_id, dose.medicine_id, newStock, inventory.unit_name);
     }
 
     return true;

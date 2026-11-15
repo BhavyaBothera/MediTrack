@@ -86,6 +86,9 @@ export const schedulePage = {
       let html = '';
       doses.forEach(dose => {
         const med = dose.medicine || {};
+        const inv = Array.isArray(med.medicine_inventory) ? med.medicine_inventory[0] : med.medicine_inventory;
+        const isOutOfStock = inv && Number(inv.current_stock) <= 0;
+        const isLowStock = inv && Number(inv.current_stock) > 0 && Number(inv.current_stock) <= Number(inv.low_stock_threshold);
         const isTaken = dose.status === 'taken';
         const isOverdue = dose.status === 'overdue';
         const isPending = dose.status === 'pending';
@@ -110,6 +113,8 @@ export const schedulePage = {
                   <span><strong>Qty:</strong> ${dose.dose_quantity || 1} ${med.medicine_type || 'tablet'}</span>
                   <span>•</span>
                   <span class="dose-tag">🍽️ ${foodLabel}</span>
+                  ${isOutOfStock ? '<span class="dose-tag" style="background:#fee2e2; color:#dc2626; font-weight:700;">🚨 Out of Stock (0 remaining)</span>' : ''}
+                  ${isLowStock ? `<span class="dose-tag" style="background:#fef3c7; color:#d97706; font-weight:600;">⚠️ Low Stock (${inv.current_stock} remaining)</span>` : ''}
                   ${dose.caretaker_alert_sent ? '<span class="dose-tag" style="background:#fee2e2; color:#dc2626;">🚨 Caretaker Alerted</span>' : ''}
                   ${dose.skip_reason ? `<span style="color:#d97706;">(Skipped: "${dose.skip_reason}")</span>` : ''}
                 </div>
