@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MediTrack – Smart Medicine Management & Medication Adherence</title>
+  
+  <!-- Favicon / Meta -->
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>💊</text></svg>">
+  
+  <!-- CSS Stylesheets -->
+  <link rel="stylesheet" href="css/variables.css" />
+  <link rel="stylesheet" href="css/base.css" />
+  <link rel="stylesheet" href="css/components.css" />
+  <link rel="stylesheet" href="css/pages.css" />
+</head>
+<body>
+  <div id="app-container">
+    <!-- Sidebar Navigation -->
+    <aside class="sidebar" id="main-sidebar">
+      <div class="sidebar-header">
+        <a href="#dashboard" class="brand-logo">
+          <div class="brand-icon">M</div>
+          <span class="brand-text">MediTrack</span>
+        </a>
+      </div>
+
+      <nav class="sidebar-nav">
+        <a href="#dashboard" class="nav-item active" data-page="dashboard">
+          <span class="nav-icon">📊</span>
+          <span>Dashboard</span>
+        </a>
+        <a href="#medicines" class="nav-item" data-page="medicines">
+          <span class="nav-icon">💊</span>
+          <span>My Medicines</span>
+        </a>
+        <a href="#schedule" class="nav-item" data-page="schedule">
+          <span class="nav-icon">⏰</span>
+          <span>Today's Schedule</span>
+        </a>
+        <a href="#calendar" class="nav-item" data-page="calendar">
+          <span class="nav-icon">🗓️</span>
+          <span>Calendar & History</span>
+        </a>
+        <a href="#inventory" class="nav-item" data-page="inventory">
+          <span class="nav-icon">📦</span>
+          <span>Medicine Inventory</span>
+        </a>
+        <a href="#analytics" class="nav-item" data-page="analytics">
+          <span class="nav-icon">📈</span>
+          <span>Adherence Analytics</span>
+        </a>
+        <a href="#prescriptions" class="nav-item" data-page="prescriptions">
+          <span class="nav-icon">📋</span>
+          <span>Prescriptions</span>
+        </a>
+        <a href="#caretakers" class="nav-item" data-page="caretakers">
+          <span class="nav-icon">🛡️</span>
+          <span>Caretakers</span>
+        </a>
+        <a href="#notifications" class="nav-item" data-page="notifications">
+          <span class="nav-icon">🔔</span>
+          <span>Notifications</span>
+        </a>
+        <a href="#settings" class="nav-item" data-page="settings">
+          <span class="nav-icon">⚙️</span>
+          <span>Settings</span>
+        </a>
+        <a href="#profile" class="nav-item" data-page="profile">
+          <span class="nav-icon">👤</span>
+          <span>My Profile</span>
+        </a>
+      </nav>
+
+      <div class="sidebar-footer">
+        <a href="#profile" class="user-snippet">
+          <div class="user-avatar" id="sidebar-user-avatar">M</div>
+          <div class="user-meta">
+            <span class="user-name" id="sidebar-user-name">Loading...</span>
+            <span class="user-role-badge" id="sidebar-user-role">Patient</span>
+          </div>
+        </a>
+        <button id="btn-logout" title="Sign Out" style="color:var(--text-muted); font-size:16px;">
+          🚪
+        </button>
+      </div>
+    </aside>
+
+    <!-- Main Content Wrapper -->
+    <div class="main-wrapper">
+      <!-- Top Sticky Header -->
+      <header class="top-header" id="main-header">
+        <div class="header-title-box">
+          <h1 id="header-page-title">Dashboard</h1>
+          <p>Real-time medication tracking & adherence monitoring</p>
+        </div>
+
+        <div class="header-actions">
+          <!-- Dark Mode Toggle -->
+          <button class="btn-icon" id="btn-toggle-theme" title="Toggle Light/Dark Theme">
+            🌓
+          </button>
+
+          <!-- Notification Bell -->
+          <a href="#notifications" class="btn-icon" title="Notifications">
+            🔔
+            <span class="badge-dot" id="notif-badge-dot" style="display:none;"></span>
+          </a>
+        </div>
+      </header>
+
+      <!-- Main Page View Container -->
+      <main class="page-container" id="main-content-slot">
+        <!-- SPA Pages are dynamically rendered here -->
+      </main>
+    </div>
+  </div>
+
+  <!-- Global Toast Notification Container -->
+  <div class="toast-container" id="toast-container"></div>
+
+  <!-- Main JavaScript Bundle -->
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
+
