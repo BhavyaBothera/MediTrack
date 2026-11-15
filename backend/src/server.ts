@@ -5,6 +5,7 @@ import path from 'path';
 import { env } from './config/env';
 import apiRoutes from './routes';
 import { errorHandler } from './middleware/errorHandler';
+import { apiRateLimiter } from './middleware/rateLimiter';
 import { medicationScheduler } from './schedulers/medicationScheduler';
 
 const app = express();
@@ -19,7 +20,7 @@ app.use(morgan('dev'));
 const frontendDir = path.resolve(__dirname, '../../frontend');
 app.use(express.static(frontendDir));
 
-// API Health Check
+// API Health Check (unthrottled for monitoring)
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
@@ -30,8 +31,8 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// Mount API Routes
-app.use('/api', apiRoutes);
+// Mount API Routes with Rate Limiting
+app.use('/api', apiRateLimiter, apiRoutes);
 
 // Fallback to frontend index.html for SPA client-side routing
 app.get('*', (req, res) => {

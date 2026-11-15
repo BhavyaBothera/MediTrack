@@ -7,6 +7,14 @@ const router = Router();
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB max
+  fileFilter: (req, file, cb) => {
+    const allowedMimes = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp'];
+    if (allowedMimes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Invalid file type. Only PDF, JPEG, PNG, and WebP prescription documents are accepted.'));
+    }
+  },
 });
 
 router.use(requireAuth);

@@ -48,3 +48,4 @@ screenshot*.png
 # Agent / Tool internal artifacts
 .system_generated/
 .gemini/
+

@@ -13,7 +13,9 @@
     "test:scheduler": "ts-node src/scripts/test-scheduler.ts",
     "test:e2e": "ts-node src/scripts/test-e2e.ts",
     "test:uat": "ts-node src/scripts/test-uat.ts",
-    "test": "ts-node src/scripts/test-scheduler.ts && ts-node src/scripts/test-e2e.ts && ts-node src/scripts/test-uat.ts"
+    "test:browser": "ts-node src/scripts/test-browser-e2e.ts",
+    "test:concurrency": "ts-node src/scripts/test-concurrency.ts",
+    "test": "ts-node src/scripts/test-scheduler.ts && ts-node src/scripts/test-e2e.ts && ts-node src/scripts/test-uat.ts && ts-node src/scripts/test-concurrency.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.48.1",
@@ -40,6 +42,7 @@
     "@types/pdfkit": "^0.13.8",
     "@types/pg": "^8.11.10",
     "@types/web-push": "^3.6.4",
+    "playwright": "^1.65.1",
     "ts-node": "^10.9.2",
     "typescript": "^5.7.2"
   }

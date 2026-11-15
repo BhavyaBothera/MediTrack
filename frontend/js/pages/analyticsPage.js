@@ -123,52 +123,62 @@ export const analyticsPage = {
       const res = await api.get('/analytics', { patientId, days: this.selectedDays });
       const m = res.metrics;
 
-      document.getElementById('ana-stat-adherence').textContent = `${m.adherencePercentage}%`;
-      document.getElementById('ana-stat-scheduled').textContent = m.totalScheduled;
-      document.getElementById('ana-stat-taken').textContent = m.totalTaken;
-      document.getElementById('ana-stat-delay').textContent = `${m.averageConfirmationDelayMinutes}m`;
+      const adherenceEl = document.getElementById('ana-stat-adherence');
+      if (!adherenceEl) return; // User navigated away while fetch was in flight
+
+      adherenceEl.textContent = `${m.adherencePercentage}%`;
+      const schedEl = document.getElementById('ana-stat-scheduled');
+      if (schedEl) schedEl.textContent = m.totalScheduled;
+      const takenEl = document.getElementById('ana-stat-taken');
+      if (takenEl) takenEl.textContent = m.totalTaken;
+      const delayEl = document.getElementById('ana-stat-delay');
+      if (delayEl) delayEl.textContent = `${m.averageConfirmationDelayMinutes}m`;
 
       // Render Bar Chart
-      if (!m.dailyTrends || m.dailyTrends.length === 0) {
-        chartSlot.innerHTML = `<div style="margin:auto; color:var(--text-muted); font-size:13px;">No historical doses in this period.</div>`;
-      } else {
-        let chartHtml = '';
-        m.dailyTrends.forEach(item => {
-          const heightPx = Math.max(10, Math.round((item.percentage / 100) * 160));
-          const color = item.percentage >= 80 ? 'linear-gradient(180deg, #10b981, #059669)' : item.percentage >= 50 ? 'linear-gradient(180deg, #f59e0b, #d97706)' : 'linear-gradient(180deg, #ef4444, #b91c1c)';
-          chartHtml += `
-            <div class="bar-group" title="${item.date}: ${item.percentage}% (${item.taken}/${item.scheduled})">
-              <span style="font-size:10px; font-weight:700; color:var(--text-secondary);">${item.percentage}%</span>
-              <div class="bar-fill" style="height:${heightPx}px; background:${color};"></div>
-              <span class="bar-label">${item.date.slice(5)}</span>
-            </div>
-          `;
-        });
-        chartSlot.innerHTML = chartHtml;
+      if (chartSlot) {
+        if (!m.dailyTrends || m.dailyTrends.length === 0) {
+          chartSlot.innerHTML = `<div style="margin:auto; color:var(--text-muted); font-size:13px;">No historical doses in this period.</div>`;
+        } else {
+          let chartHtml = '';
+          m.dailyTrends.forEach(item => {
+            const heightPx = Math.max(10, Math.round((item.percentage / 100) * 160));
+            const color = item.percentage >= 80 ? 'linear-gradient(180deg, #10b981, #059669)' : item.percentage >= 50 ? 'linear-gradient(180deg, #f59e0b, #d97706)' : 'linear-gradient(180deg, #ef4444, #b91c1c)';
+            chartHtml += `
+              <div class="bar-group" title="${item.date}: ${item.percentage}% (${item.taken}/${item.scheduled})">
+                <span style="font-size:10px; font-weight:700; color:var(--text-secondary);">${item.percentage}%</span>
+                <div class="bar-fill" style="height:${heightPx}px; background:${color};"></div>
+                <span class="bar-label">${item.date.slice(5)}</span>
+              </div>
+            `;
+          });
+          chartSlot.innerHTML = chartHtml;
+        }
       }
 
       // Render Medicine Breakdown
-      if (!m.medicineBreakdown || m.medicineBreakdown.length === 0) {
-        tableBody.innerHTML = `<tr><td colspan="5" style="text-align:center; padding:30px; color:var(--text-muted);">No medicines found.</td></tr>`;
-      } else {
-        let medHtml = '';
-        m.medicineBreakdown.forEach(item => {
-          const color = item.percentage >= 80 ? 'var(--emerald-500)' : item.percentage >= 50 ? '#f59e0b' : '#ef4444';
-          medHtml += `
-            <tr>
-              <td><strong>${item.medicineName}</strong></td>
-              <td>${item.scheduled} doses</td>
-              <td>${item.taken} doses</td>
-              <td>
-                <div class="progress-container" style="margin:0;">
-                  <div class="progress-bar" style="width:${item.percentage}%; background:${color};"></div>
-                </div>
-              </td>
-              <td style="text-align:right; font-weight:700; color:${color};">${item.percentage}%</td>
-            </tr>
-          `;
-        });
-        tableBody.innerHTML = medHtml;
+      if (tableBody) {
+        if (!m.medicineBreakdown || m.medicineBreakdown.length === 0) {
+          tableBody.innerHTML = `<tr><td colspan="5" style="text-align:center; padding:30px; color:var(--text-muted);">No medicines found.</td></tr>`;
+        } else {
+          let medHtml = '';
+          m.medicineBreakdown.forEach(item => {
+            const color = item.percentage >= 80 ? 'var(--emerald-500)' : item.percentage >= 50 ? '#f59e0b' : '#ef4444';
+            medHtml += `
+              <tr>
+                <td><strong>${item.medicineName}</strong></td>
+                <td>${item.scheduled} doses</td>
+                <td>${item.taken} doses</td>
+                <td>
+                  <div class="progress-container" style="margin:0;">
+                    <div class="progress-bar" style="width:${item.percentage}%; background:${color};"></div>
+                  </div>
+                </td>
+                <td style="text-align:right; font-weight:700; color:${color};">${item.percentage}%</td>
+              </tr>
+            `;
+          });
+          tableBody.innerHTML = medHtml;
+        }
       }
 
     } catch (err) {
