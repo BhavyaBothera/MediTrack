@@ -28,7 +28,7 @@ export class DoseController {
       const pending = doses.filter(d => d.status === 'pending').length;
       const overdue = doses.filter(d => d.status === 'overdue').length;
       const skipped = doses.filter(d => d.status === 'skipped').length;
-      const progress = total > 0 ? Math.round((taken / total) * 100) : 100;
+      const progress = total > 0 ? Math.round((taken / total) * 100) : 0;
 
       res.json({
         success: true,

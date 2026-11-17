@@ -12,7 +12,7 @@ export const dashboardPage = {
             <span class="stat-label">Today's Doses</span>
             <div class="stat-icon" style="background:#e0f2fe; color:#0284c7;">💊</div>
           </div>
-          <div class="stat-value" id="stat-total">--</div>
+          <div class="stat-value" id="stat-total"><span class="skeleton-shimmer skeleton-stat-value"></span></div>
           <div class="stat-footer">Total scheduled today</div>
         </div>
 
@@ -21,7 +21,7 @@ export const dashboardPage = {
             <span class="stat-label">Taken / Confirmed</span>
             <div class="stat-icon" style="background:#dcfce7; color:#16a34a;">✓</div>
           </div>
-          <div class="stat-value" id="stat-taken" style="color:var(--emerald-600);">--</div>
+          <div class="stat-value" id="stat-taken" style="color:var(--emerald-600);"><span class="skeleton-shimmer skeleton-stat-value"></span></div>
           <div class="stat-footer">Confirmed on schedule</div>
         </div>
 
@@ -30,7 +30,7 @@ export const dashboardPage = {
             <span class="stat-label">Pending</span>
             <div class="stat-icon" style="background:#fef3c7; color:#d97706;">⏳</div>
           </div>
-          <div class="stat-value" id="stat-pending" style="color:#d97706;">--</div>
+          <div class="stat-value" id="stat-pending" style="color:#d97706;"><span class="skeleton-shimmer skeleton-stat-value"></span></div>
           <div class="stat-footer">Awaiting scheduled time</div>
         </div>
 
@@ -39,7 +39,7 @@ export const dashboardPage = {
             <span class="stat-label">Overdue</span>
             <div class="stat-icon" style="background:#fee2e2; color:#dc2626;">⚠️</div>
           </div>
-          <div class="stat-value" id="stat-overdue" style="color:var(--status-overdue-badge);">--</div>
+          <div class="stat-value" id="stat-overdue" style="color:var(--status-overdue-badge);"><span class="skeleton-shimmer skeleton-stat-value"></span></div>
           <div class="stat-footer">Grace period expired</div>
         </div>
 
@@ -48,7 +48,7 @@ export const dashboardPage = {
             <span class="stat-label">Adherence Rate</span>
             <div class="stat-icon" style="background:#f3e8ff; color:#9333ea;">📈</div>
           </div>
-          <div class="stat-value" id="stat-progress">--%</div>
+          <div class="stat-value" id="stat-progress"><span class="skeleton-shimmer skeleton-stat-value"></span></div>
           <div class="stat-footer">Daily completion</div>
         </div>
       </div>
@@ -79,11 +79,12 @@ export const dashboardPage = {
       </div>
 
       <div class="doses-timeline" id="dashboard-doses-list">
-        <div style="text-align:center; padding:40px; color:var(--text-muted);">Loading today's schedule...</div>
+        <div class="skeleton-dose-card skeleton-shimmer" style="margin-bottom:12px;"></div>
+        <div class="skeleton-dose-card skeleton-shimmer"></div>
       </div>
 
       <!-- Bottom Grid: Low Stock Alert & System Health -->
-      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(360px, 1fr)); gap:24px; margin-top:32px;">
+      <div class="dashboard-bottom-grid">
         <!-- Stock Alerts -->
         <div style="background:var(--bg-surface); border:1px solid var(--border-color); border-radius:var(--radius-lg); padding:24px;">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
@@ -227,9 +228,19 @@ export const dashboardPage = {
       // Render medication list
       if (!doses || doses.length === 0) {
         listSlot.innerHTML = `
-          <div style="background:var(--bg-surface); border:1px solid var(--border-color); border-radius:var(--radius-lg); padding:40px; text-align:center;">
-            <p style="color:var(--text-muted); font-size:15px; margin-bottom:16px;">No medicines scheduled for today.</p>
-            <a href="#medicines" class="btn btn-primary btn-sm">+ Add Your First Medicine</a>
+          <div class="dashboard-empty-card" style="background:var(--bg-surface); border:1px solid var(--border-color); border-radius:var(--radius-lg); padding:40px 24px; text-align:center;">
+            <div style="font-size:40px; margin-bottom:12px;">📋</div>
+            <h3 style="font-size:17px; font-weight:700; color:var(--text-primary); margin-bottom:6px;">No Medications Scheduled For Today</h3>
+            <p style="color:var(--text-muted); font-size:13px; max-width:440px; margin:0 auto 20px;">
+              You currently have no prescribed medicines active in your daily schedule. Add a prescribed medication or upload your doctor's prescription to get started.
+            </p>
+            <div style="display:flex; justify-content:center; gap:10px; flex-wrap:wrap;">
+              <a href="#medicines" class="btn btn-primary btn-sm">+ Add Prescribed Medicine</a>
+              <a href="#prescriptions" class="btn btn-outline btn-sm">📄 Upload Prescription</a>
+            </div>
+            <div style="margin-top:20px; font-size:11px; color:var(--text-muted); border-top:1px dashed var(--border-color); padding-top:12px; max-width:480px; margin-left:auto; margin-right:auto;">
+              ⚖️ <strong>Medical Disclaimer:</strong> MediTrack is an adherence assistant and does not prescribe, diagnose, or modify treatments. Always follow your licensed healthcare provider's instructions.
+            </div>
           </div>
         `;
         return;
@@ -317,7 +328,15 @@ export const dashboardPage = {
       });
 
     } catch (err) {
-      listSlot.innerHTML = `<div style="color:#ef4444; padding:20px;">Failed to load schedule: ${err.message}</div>`;
+      listSlot.innerHTML = `
+        <div style="background:#fef2f2; border:1px solid #fecaca; border-radius:var(--radius-lg); padding:24px; text-align:center;">
+          <div style="font-size:32px; margin-bottom:8px;">⚠️</div>
+          <h4 style="font-size:15px; font-weight:700; color:#991b1b; margin-bottom:4px;">Unable to load medication schedule</h4>
+          <p style="font-size:13px; color:#b91c1c; margin-bottom:14px;">${err.message || 'Network error occurred while fetching your schedule.'}</p>
+          <button id="btn-retry-doses" class="btn btn-secondary btn-sm">🔄 Retry</button>
+        </div>
+      `;
+      document.getElementById('btn-retry-doses')?.addEventListener('click', () => this.loadDoses());
     }
   },
 
@@ -393,7 +412,7 @@ export const dashboardPage = {
       const res = await api.get('/notifications/status');
       const channels = res.channels || {};
 
-      let html = '<div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">';
+      let html = '<div class="channels-status-grid">';
       for (const [name, info] of Object.entries(channels)) {
         const isLive = info.mode === 'LIVE';
         const badgeColor = isLive ? 'var(--emerald-500)' : '#f59e0b';

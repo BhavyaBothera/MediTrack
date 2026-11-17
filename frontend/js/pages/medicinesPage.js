@@ -211,7 +211,7 @@ export const medicinesPage = {
       let html = '';
       medicines.forEach(m => {
         const isDiscontinued = m.status === 'discontinued';
-        const inv = m.medicine_inventory?.[0] || {};
+        const inv = Array.isArray(m.medicine_inventory) ? (m.medicine_inventory[0] || {}) : (m.medicine_inventory || {});
         const schedules = m.medication_schedules || [];
         const timesStr = schedules.map(s => s.scheduled_time.slice(0, 5)).join(', ') || 'No schedule';
         const stock = inv.current_stock !== undefined ? inv.current_stock : '--';

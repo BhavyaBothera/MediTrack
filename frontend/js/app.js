@@ -23,6 +23,29 @@ class App {
     document.getElementById('btn-toggle-theme')?.addEventListener('click', () => {
       this.toggleTheme();
     });
+
+    // Mobile menu toggle
+    const menuBtn = document.getElementById('btn-toggle-menu');
+    const sidebar = document.getElementById('main-sidebar');
+    const backdrop = document.getElementById('sidebar-backdrop');
+
+    menuBtn?.addEventListener('click', () => {
+      sidebar?.classList.toggle('mobile-open');
+      backdrop?.classList.toggle('active');
+    });
+
+    backdrop?.addEventListener('click', () => {
+      sidebar?.classList.remove('mobile-open');
+      backdrop?.classList.remove('active');
+    });
+
+    // Close mobile menu on nav link clicks
+    document.querySelectorAll('.sidebar-nav .nav-item').forEach(item => {
+      item.addEventListener('click', () => {
+        sidebar?.classList.remove('mobile-open');
+        backdrop?.classList.remove('active');
+      });
+    });
   }
 
   initTheme() {

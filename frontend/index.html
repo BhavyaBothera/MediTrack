@@ -90,9 +90,14 @@
     <div class="main-wrapper">
       <!-- Top Sticky Header -->
       <header class="top-header" id="main-header">
-        <div class="header-title-box">
-          <h1 id="header-page-title">Dashboard</h1>
-          <p>Real-time medication tracking & adherence monitoring</p>
+        <div style="display:flex; align-items:center; gap:12px;">
+          <button class="btn-icon mobile-menu-toggle" id="btn-toggle-menu" title="Toggle Navigation Menu">
+            ☰
+          </button>
+          <div class="header-title-box">
+            <h1 id="header-page-title">Dashboard</h1>
+            <p>Real-time medication tracking & adherence monitoring</p>
+          </div>
         </div>
 
         <div class="header-actions">
@@ -108,6 +113,9 @@
           </a>
         </div>
       </header>
+
+      <!-- Sidebar Backdrop for Mobile Drawer -->
+      <div class="sidebar-backdrop" id="sidebar-backdrop"></div>
 
       <!-- Main Page View Container -->
       <main class="page-container" id="main-content-slot">

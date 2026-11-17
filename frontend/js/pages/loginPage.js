@@ -1,4 +1,5 @@
 import { auth } from '../auth.js';
+import { router } from '../router.js';
 
 export const loginPage = {
   render() {
@@ -116,8 +117,12 @@ export const loginPage = {
         window.app.showToast('Signing in...', 'info');
         await auth.login(email, pass);
         window.app.showToast('Login successful!', 'success');
-        window.location.hash = '#dashboard';
-        window.location.reload();
+        window.app.initUserUI();
+        if (window.location.hash === '#dashboard') {
+          router.navigate();
+        } else {
+          window.location.hash = '#dashboard';
+        }
       } catch (err) {
         window.app.showToast(err.message, 'error');
       }
@@ -136,8 +141,12 @@ export const loginPage = {
         window.app.showToast('Creating account...', 'info');
         await auth.register({ fullName, email, password, role, phone });
         window.app.showToast('Registration successful!', 'success');
-        window.location.hash = '#dashboard';
-        window.location.reload();
+        window.app.initUserUI();
+        if (window.location.hash === '#dashboard') {
+          router.navigate();
+        } else {
+          window.location.hash = '#dashboard';
+        }
       } catch (err) {
         window.app.showToast(err.message, 'error');
       }

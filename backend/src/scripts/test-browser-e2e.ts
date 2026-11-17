@@ -64,7 +64,11 @@ async function runBrowserAcceptanceTests() {
     console.log('[Browser] Waiting for dashboard navigation...');
     await page.waitForSelector('#main-sidebar', { timeout: 8000 });
     await page.waitForSelector('#stat-total', { timeout: 8000 });
-    await page.waitForTimeout(1500);
+    await page.waitForFunction(() => {
+      const el = document.getElementById('stat-total');
+      return el && el.textContent && el.textContent.trim() !== '--' && !el.querySelector('.skeleton-shimmer');
+    }, { timeout: 15000 }).catch(() => console.log('Timeout waiting for stat-total populate'));
+    await page.waitForTimeout(1000);
 
     // 1.3 Dashboard Page
     console.log('[Browser] Capturing Dashboard Page (#dashboard)...');
@@ -85,6 +89,10 @@ async function runBrowserAcceptanceTests() {
     console.log('[Browser] Navigating to Medicines Page (#medicines)...');
     await page.click('a[href="#medicines"]');
     await page.waitForSelector('.medicines-grid', { timeout: 5000 });
+    await page.waitForFunction(() => {
+      const stock = document.querySelector('.med-stock-status');
+      return stock && stock.textContent && !stock.textContent.includes('--');
+    }, { timeout: 10000 }).catch(() => {});
     await page.waitForTimeout(1000);
     const medsScreenshot = path.join(screenshotsDir, 'desktop_04_medicines.png');
     await page.screenshot({ path: medsScreenshot, fullPage: false });
@@ -201,9 +209,71 @@ async function runBrowserAcceptanceTests() {
     await desktopContext.close();
 
     // -------------------------------------------------------------------------
-    // 2. MOBILE VIEWPORT TESTING (375 x 667 - iPhone SE / Standard Mobile)
+    // 2. MULTI-VIEWPORT RESPONSIVENESS SUITE (360px, 390px, 430px, 768px, 1024px, 1440px)
     // -------------------------------------------------------------------------
-    console.log('\n--- 2. MOBILE VIEWPORT SUITE (375 x 667) ---');
+    console.log('\n--- 2. MULTI-VIEWPORT RESPONSIVENESS SUITE ---');
+
+    const viewports = [
+      { name: 'mobile_360', width: 360, height: 740, isMobile: true },
+      { name: 'mobile_390', width: 390, height: 844, isMobile: true },
+      { name: 'mobile_430', width: 430, height: 932, isMobile: true },
+      { name: 'tablet_768', width: 768, height: 1024, isMobile: false },
+      { name: 'tablet_1024', width: 1024, height: 768, isMobile: false },
+      { name: 'desktop_1440', width: 1440, height: 900, isMobile: false },
+    ];
+
+    for (const vp of viewports) {
+      console.log(`\n[Viewport Test] Testing ${vp.name} (${vp.width}x${vp.height})...`);
+      const vpContext = await browser.newContext({
+        viewport: { width: vp.width, height: vp.height },
+        isMobile: vp.isMobile,
+        hasTouch: vp.isMobile,
+        deviceScaleFactor: vp.isMobile ? 2 : 1,
+      });
+      const vpPage = await vpContext.newPage();
+
+      await vpPage.goto('http://localhost:5000/#login');
+      await vpPage.fill('#login-email', 'patient@meditrack.local');
+      await vpPage.fill('#login-password', 'Password@123');
+      await vpPage.click('#login-form button[type="submit"]');
+
+      await vpPage.waitForSelector('#stat-total', { timeout: 10000 });
+      await vpPage.waitForFunction(() => {
+        const el = document.getElementById('stat-total');
+        return el && el.textContent && el.textContent.trim() !== '--' && !el.querySelector('.skeleton-shimmer');
+      }, { timeout: 15000 }).catch(() => {});
+      await vpPage.waitForTimeout(800);
+
+      // Check horizontal overflow
+      const overflow = await vpPage.evaluate(() => {
+        return document.documentElement.scrollWidth > document.documentElement.clientWidth;
+      });
+      console.log(`  Horizontal Overflow: ${overflow ? '⚠️ DETECTED' : '✓ NONE (Passed 0 overflow)'}`);
+
+      const vpScreenshot = path.join(screenshotsDir, `${vp.name}_dashboard.png`);
+      await vpPage.screenshot({ path: vpScreenshot, fullPage: false });
+      console.log(`  ✓ Screenshot: ${path.basename(vpScreenshot)}`);
+
+      // Test mobile menu drawer if mobile/tablet
+      if (vp.width <= 768) {
+        console.log(`  Testing mobile hamburger menu on ${vp.name}...`);
+        await vpPage.click('#btn-toggle-menu');
+        await vpPage.waitForSelector('#main-sidebar.mobile-open', { timeout: 3000 });
+        const drawerScreenshot = path.join(screenshotsDir, `${vp.name}_menu_drawer.png`);
+        await vpPage.screenshot({ path: drawerScreenshot, fullPage: false });
+        console.log(`  ✓ Screenshot: ${path.basename(drawerScreenshot)}`);
+        // Close menu cleanly
+        await vpPage.evaluate(() => document.getElementById('sidebar-backdrop')?.click());
+        await vpPage.waitForTimeout(300);
+      }
+
+      await vpContext.close();
+    }
+
+    // -------------------------------------------------------------------------
+    // 2B. MOBILE SUB-PAGES VIEWPORT TESTING (375 x 667 - Standard Mobile)
+    // -------------------------------------------------------------------------
+    console.log('\n--- 2B. MOBILE SUB-PAGES SUITE (375 x 667) ---');
     const mobileContext = await browser.newContext({
       viewport: { width: 375, height: 667 },
       isMobile: true,
@@ -217,6 +287,10 @@ async function runBrowserAcceptanceTests() {
     await mobilePage.fill('#login-password', 'Password@123');
     await mobilePage.click('#login-form button[type="submit"]');
     await mobilePage.waitForSelector('#stat-total', { timeout: 8000 });
+    await mobilePage.waitForFunction(() => {
+      const el = document.getElementById('stat-total');
+      return el && el.textContent && el.textContent.trim() !== '--' && !el.querySelector('.skeleton-shimmer');
+    }, { timeout: 15000 }).catch(() => {});
     await mobilePage.waitForTimeout(1000);
 
     // 2.1 Mobile Dashboard
@@ -238,6 +312,10 @@ async function runBrowserAcceptanceTests() {
     console.log('[Mobile] Navigating to Mobile Medicines (#medicines)...');
     await mobilePage.goto('http://localhost:5000/#medicines');
     await mobilePage.waitForSelector('.medicines-grid', { timeout: 5000 });
+    await mobilePage.waitForFunction(() => {
+      const stock = document.querySelector('.med-stock-status');
+      return stock && stock.textContent && !stock.textContent.includes('--');
+    }, { timeout: 10000 }).catch(() => {});
     await mobilePage.waitForTimeout(1000);
     const mMedsScreenshot = path.join(screenshotsDir, 'mobile_03_medicines.png');
     await mobilePage.screenshot({ path: mMedsScreenshot, fullPage: false });
@@ -279,8 +357,12 @@ async function runBrowserAcceptanceTests() {
     await cPage.click('#login-form button[type="submit"]');
 
     await cPage.waitForSelector('#stat-total', { timeout: 10000 });
+    await cPage.waitForFunction(() => {
+      const el = document.getElementById('stat-total');
+      return el && el.textContent && el.textContent.trim() !== '--' && !el.querySelector('.skeleton-shimmer');
+    }, { timeout: 15000 }).catch(() => {});
     await cPage.waitForSelector('.caretaker-view-banner', { timeout: 10000 }).catch(() => console.log('Caretaker banner check'));
-    await cPage.waitForTimeout(1500);
+    await cPage.waitForTimeout(1000);
 
     const caretakerScreenshot = path.join(screenshotsDir, 'desktop_12_caretaker_monitoring.png');
     await cPage.screenshot({ path: caretakerScreenshot, fullPage: false });
