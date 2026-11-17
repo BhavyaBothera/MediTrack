@@ -11,8 +11,14 @@ export const env = {
   ALLOWED_ORIGINS: process.env.ALLOWED_ORIGINS
     ? process.env.ALLOWED_ORIGINS.split(',').map(s => s.trim()).filter(Boolean)
     : [],
-  TRUST_PROXY: process.env.TRUST_PROXY === 'true' || process.env.TRUST_PROXY === '1',
+  TRUST_PROXY: process.env.TRUST_PROXY || '',
   
+  // Database Environment Isolation
+  APPROVED_TEST_PROJECT_REF: process.env.APPROVED_TEST_PROJECT_REF || 'zadepztpubocvhjivlvj',
+  PRODUCTION_PROJECT_REF: process.env.PRODUCTION_PROJECT_REF || '',
+  TEST_EXECUTION_AUTHORIZED: process.env.TEST_EXECUTION_AUTHORIZED === 'true',
+  ALLOW_TEST_MUTATIONS: process.env.ALLOW_TEST_MUTATIONS === 'true',
+
   // Supabase
   SUPABASE_URL: process.env.SUPABASE_URL || 'https://zadepztpubocvhjivlvj.supabase.co',
   SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY || '',

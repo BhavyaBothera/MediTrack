@@ -1,5 +1,8 @@
 import http from 'http';
 import { assertSafeExecutionEnvironment } from '../utils/environmentGuard';
+import { isOriginAllowed, getTrustedOrigins } from '../server';
+import { getClientIp } from '../middleware/rateLimiter';
+import { env } from '../config/env';
 
 interface HttpResponse {
   statusCode: number;
@@ -50,7 +53,7 @@ function makeRequest(
 
 async function runCorsAndSecurityTests() {
   console.log('========================================================================');
-  console.log(' MEDITRACK – CORS, ENVIRONMENT GUARD & RATE LIMIT SECURITY TEST SUITE');
+  console.log(' MEDITRACK – P0 SECURITY AUDIT: CORS, ENVIRONMENT ISOLATION & PROXY TRUST');
   console.log('========================================================================\n');
 
   let passed = 0;
@@ -69,9 +72,9 @@ async function runCorsAndSecurityTests() {
   const serverUrl = 'http://localhost:5000';
 
   // -------------------------------------------------------------------------
-  // 1. CORS Allowlist Tests
+  // 1. Live Server CORS Tests (Development Mode)
   // -------------------------------------------------------------------------
-  console.log('--- 1. TESTING CORS ALLOWLIST & CREDENTIALS ---');
+  console.log('--- 1. TESTING LIVE CORS ALLOWLIST & CREDENTIALS ---');
 
   // Test 1.1: Localhost allowed origin
   const resLocalhost = await makeRequest(`${serverUrl}/api/health`, 'GET', {
@@ -113,12 +116,10 @@ async function runCorsAndSecurityTests() {
   );
 
   // Test 1.4: Reject untrusted origin
-  console.log('\n--- 2. TESTING CORS REJECTION OF UNTRUSTED ORIGIN ---');
   const untrustedOrigin = 'https://evil-phishing-site.com';
   const resUntrusted = await makeRequest(`${serverUrl}/api/health`, 'GET', {
     Origin: untrustedOrigin
   });
-
   assert(
     'Untrusted origin rejected with HTTP 403 Forbidden',
     resUntrusted.statusCode === 403,
@@ -135,46 +136,203 @@ async function runCorsAndSecurityTests() {
   );
 
   // -------------------------------------------------------------------------
-  // 3. Environment Guard Tests
+  // 2. Production CORS Verification (P0.5)
   // -------------------------------------------------------------------------
-  console.log('\n--- 3. TESTING ENVIRONMENT GUARD SAFETY ENFORCEMENT ---');
-  const prevEnv = process.env.NODE_ENV;
+  console.log('\n--- 2. PRODUCTION CORS POLICY ENFORCEMENT (P0.5) ---');
+  const prodFrontend = 'https://meditrack-app.vercel.app';
+  const prodOriginsConfig = [prodFrontend, 'http://localhost:5000', 'http://127.0.0.1:5000'];
+
+  // Test 2.1: Production frontend accepted
+  const prodAllowed = isOriginAllowed(prodFrontend, 'production', prodOriginsConfig);
+  assert(
+    'Configured production frontend origin is accepted in NODE_ENV=production',
+    prodAllowed === true
+  );
+
+  // Test 2.2: Localhost rejected in production even if misconfigured in origin list
+  const prodLocalhostAllowed = isOriginAllowed('http://localhost:5000', 'production', prodOriginsConfig);
+  assert(
+    'Localhost origin is strictly REJECTED in NODE_ENV=production even if configured in origin list',
+    prodLocalhostAllowed === false
+  );
+
+  // Test 2.3: 127.0.0.1 rejected in production
+  const prod127Allowed = isOriginAllowed('http://127.0.0.1:5000', 'production', prodOriginsConfig);
+  assert(
+    '127.0.0.1 origin is strictly REJECTED in NODE_ENV=production',
+    prod127Allowed === false
+  );
+
+  // Test 2.4: Untrusted domain rejected in production
+  const prodUntrustedAllowed = isOriginAllowed('https://malicious-site.com', 'production', prodOriginsConfig);
+  assert(
+    'Untrusted external domain is strictly REJECTED in NODE_ENV=production',
+    prodUntrustedAllowed === false
+  );
+
+  // Test 2.5: Missing / empty production origin configuration fails safely
+  const emptyProdAllowed = isOriginAllowed(prodFrontend, 'production', []);
+  assert(
+    'Empty production origin configuration fails safely (rejects all browser origins)',
+    emptyProdAllowed === false
+  );
+
+  // Test 2.6: Direct request (no origin) allowed in production
+  const prodDirectAllowed = isOriginAllowed(undefined, 'production', prodOriginsConfig);
+  assert(
+    'Direct server-to-server request (no origin header) allowed in production',
+    prodDirectAllowed === true
+  );
+
+  // -------------------------------------------------------------------------
+  // 3. Database Environment Isolation Guard (P0.1)
+  // -------------------------------------------------------------------------
+  console.log('\n--- 3. DATABASE ENVIRONMENT ISOLATION ENFORCEMENT (P0.1) ---');
+  const savedNodeEnv = process.env.NODE_ENV;
+  const savedUrl = process.env.SUPABASE_URL;
+  const savedTestAuth = process.env.TEST_EXECUTION_AUTHORIZED;
+  const savedProdRef = process.env.PRODUCTION_PROJECT_REF;
+  const savedTestRef = process.env.APPROVED_TEST_PROJECT_REF;
 
   try {
-    // Test 3.1: Guard passes in development/test
+    // Test 3.1: Approved test database with authorization passes in development
     process.env.NODE_ENV = 'development';
-    let devPassed = false;
-    try {
-      assertSafeExecutionEnvironment('Unit Test Guard');
-      devPassed = true;
-    } catch {
-      devPassed = false;
-    }
-    assert('assertSafeExecutionEnvironment allows execution in development', devPassed);
+    process.env.SUPABASE_URL = 'https://zadepztpubocvhjivlvj.supabase.co';
+    process.env.APPROVED_TEST_PROJECT_REF = 'zadepztpubocvhjivlvj';
+    process.env.PRODUCTION_PROJECT_REF = 'meditrack-prod-cluster';
+    process.env.TEST_EXECUTION_AUTHORIZED = 'true';
 
-    // Test 3.2: Guard throws and blocks in production
-    process.env.NODE_ENV = 'production';
-    let prodBlocked = false;
-    let prodError = '';
+    let authorizedPassed = false;
     try {
-      assertSafeExecutionEnvironment('Dangerous Production Wipe');
-    } catch (err: any) {
-      prodBlocked = true;
-      prodError = err.message;
+      assertSafeExecutionEnvironment('Approved Test Operation');
+      authorizedPassed = true;
+    } catch {
+      authorizedPassed = false;
     }
     assert(
-      'assertSafeExecutionEnvironment strictly throws in NODE_ENV=production',
-      prodBlocked && prodError.includes('Dangerous Production Wipe') && prodError.includes('blocked'),
-      `Error: ${prodError}`
+      'assertSafeExecutionEnvironment permits execution when database matches APPROVED_TEST_PROJECT_REF and authorized',
+      authorizedPassed
+    );
+
+    // Test 3.2: NODE_ENV=development CANNOT bypass the production database guard!
+    process.env.NODE_ENV = 'development';
+    process.env.SUPABASE_URL = 'https://meditrack-prod-cluster.supabase.co';
+    process.env.PRODUCTION_PROJECT_REF = 'meditrack-prod-cluster';
+    process.env.TEST_EXECUTION_AUTHORIZED = 'true';
+
+    let prodDbBlockedInDev = false;
+    let prodDbError = '';
+    try {
+      assertSafeExecutionEnvironment('Attempted Dev Wipe on Prod DB');
+    } catch (err: any) {
+      prodDbBlockedInDev = true;
+      prodDbError = err.message;
+    }
+    assert(
+      'NODE_ENV=development CANNOT bypass production database guard: target matching PRODUCTION_PROJECT_REF is blocked',
+      prodDbBlockedInDev && prodDbError.includes('explicitly designated as PRODUCTION'),
+      `Error: ${prodDbError}`
+    );
+
+    // Test 3.3: Unknown unapproved project reference is blocked
+    process.env.SUPABASE_URL = 'https://random-unapproved-ref.supabase.co';
+    let unapprovedDbBlocked = false;
+    let unapprovedDbError = '';
+    try {
+      assertSafeExecutionEnvironment('Attempted Dev Wipe on Unknown DB');
+    } catch (err: any) {
+      unapprovedDbBlocked = true;
+      unapprovedDbError = err.message;
+    }
+    assert(
+      'Unapproved database project reference is blocked (does not match APPROVED_TEST_PROJECT_REF)',
+      unapprovedDbBlocked && unapprovedDbError.includes('NOT in the approved test database list'),
+      `Error: ${unapprovedDbError}`
+    );
+
+    // Test 3.4: Missing test authorization flag is blocked
+    process.env.SUPABASE_URL = 'https://zadepztpubocvhjivlvj.supabase.co';
+    delete process.env.TEST_EXECUTION_AUTHORIZED;
+    // ensure command line arguments don't contain --authorized
+    const origArgv = [...process.argv];
+    process.argv = process.argv.filter(arg => arg !== '--authorized');
+
+    let unauthorizedBlocked = false;
+    let unauthorizedError = '';
+    try {
+      assertSafeExecutionEnvironment('Unauthorized Mutation');
+    } catch (err: any) {
+      unauthorizedBlocked = true;
+      unauthorizedError = err.message;
+    }
+    assert(
+      'Missing TEST_EXECUTION_AUTHORIZED flag and missing --authorized CLI flag is strictly blocked',
+      unauthorizedBlocked && unauthorizedError.includes('require an explicit authorization flag'),
+      `Error: ${unauthorizedError}`
+    );
+    process.argv = origArgv;
+
+    // Test 3.5: NODE_ENV=production is strictly blocked
+    process.env.NODE_ENV = 'production';
+    process.env.TEST_EXECUTION_AUTHORIZED = 'true';
+    let prodEnvBlocked = false;
+    let prodEnvError = '';
+    try {
+      assertSafeExecutionEnvironment('Destructive Action');
+    } catch (err: any) {
+      prodEnvBlocked = true;
+      prodEnvError = err.message;
+    }
+    assert(
+      'NODE_ENV=production is strictly blocked regardless of flags or project reference',
+      prodEnvBlocked && prodEnvError.includes('NODE_ENV=production'),
+      `Error: ${prodEnvError}`
     );
   } finally {
-    process.env.NODE_ENV = prevEnv;
+    process.env.NODE_ENV = savedNodeEnv;
+    process.env.SUPABASE_URL = savedUrl;
+    process.env.TEST_EXECUTION_AUTHORIZED = savedTestAuth;
+    process.env.PRODUCTION_PROJECT_REF = savedProdRef;
+    process.env.APPROVED_TEST_PROJECT_REF = savedTestRef;
   }
 
   // -------------------------------------------------------------------------
-  // 4. Rate Limiting Tests
+  // 4. Reverse Proxy Trust & IP Spoofing Tests (P0.4)
   // -------------------------------------------------------------------------
-  console.log('\n--- 4. TESTING AUTH RATE LIMITER ENFORCEMENT ---');
+  console.log('\n--- 4. REVERSE PROXY TRUST & IP SPOOFING DEFENSE (P0.4) ---');
+
+  // Test 4.1: Direct connection: trust proxy is disabled, spoofed X-Forwarded-For is IGNORED
+  const mockReqDirect: any = {
+    app: { get: (key: string) => (key === 'trust proxy' ? false : undefined) },
+    socket: { remoteAddress: '198.51.100.12' },
+    ip: '198.51.100.12',
+    headers: { 'x-forwarded-for': '203.0.113.195' }, // Attacker trying to spoof IP
+  };
+  const resolvedDirectIp = getClientIp(mockReqDirect);
+  assert(
+    'Direct connection (trust proxy = false) ignores spoofed X-Forwarded-For and resolves socket address',
+    resolvedDirectIp === '198.51.100.12',
+    `Resolved IP: ${resolvedDirectIp}`
+  );
+
+  // Test 4.2: Trusted reverse proxy: trust proxy is enabled, verified upstream client IP is resolved
+  const mockReqProxied: any = {
+    app: { get: (key: string) => (key === 'trust proxy' ? 1 : undefined) },
+    socket: { remoteAddress: '10.0.0.1' }, // Load balancer internal address
+    ip: '203.0.113.50',                   // Express-verified client IP after 1 trusted hop
+    headers: { 'x-forwarded-for': '203.0.113.50' },
+  };
+  const resolvedProxiedIp = getClientIp(mockReqProxied);
+  assert(
+    'Configured reverse proxy deployment (trust proxy = 1) uses Express-verified req.ip',
+    resolvedProxiedIp === '203.0.113.50',
+    `Resolved IP: ${resolvedProxiedIp}`
+  );
+
+  // -------------------------------------------------------------------------
+  // 5. Rate Limiting Tests
+  // -------------------------------------------------------------------------
+  console.log('\n--- 5. TESTING AUTH RATE LIMITER ENFORCEMENT ---');
   console.log('Sending burst of 20 rapid login attempts to trigger 15-request limit...');
 
   let rateLimitTriggered = false;

@@ -10,30 +10,75 @@ import { medicationScheduler } from './schedulers/medicationScheduler';
 
 const app = express();
 
-// Trust reverse proxy if explicitly enabled or in production
-if (env.TRUST_PROXY || env.NODE_ENV === 'production') {
-  app.set('trust proxy', 1);
+// -----------------------------------------------------------------------------
+// Reverse Proxy Trust Configuration (P0.4)
+// Requires explicit configuration; NEVER unconditionally trusts proxy hops.
+// -----------------------------------------------------------------------------
+const trustProxyConfig = env.TRUST_PROXY;
+if (trustProxyConfig && trustProxyConfig !== 'false') {
+  const numericHops = parseInt(String(trustProxyConfig), 10);
+  if (!isNaN(numericHops) && numericHops > 0) {
+    app.set('trust proxy', numericHops);
+    console.log(`[Security] Reverse proxy trust enabled for ${numericHops} upstream hop(s).`);
+  } else if (trustProxyConfig === 'true' || trustProxyConfig === '1') {
+    app.set('trust proxy', 1);
+    console.log('[Security] Reverse proxy trust enabled for 1 upstream hop.');
+  } else if (typeof trustProxyConfig === 'string' && trustProxyConfig.includes(',')) {
+    const proxyList = trustProxyConfig.split(',').map(s => s.trim()).filter(Boolean);
+    app.set('trust proxy', proxyList);
+    console.log(`[Security] Reverse proxy trust enabled for IP allowlist: ${proxyList.join(', ')}`);
+  } else {
+    app.set('trust proxy', trustProxyConfig);
+    console.log(`[Security] Reverse proxy trust enabled with config: "${trustProxyConfig}".`);
+  }
+} else {
+  app.set('trust proxy', false);
 }
 
 // -----------------------------------------------------------------------------
-// CORS Security Configuration
+// CORS Security Configuration (P0.5)
 // -----------------------------------------------------------------------------
-const isProduction = env.NODE_ENV === 'production';
+export function getTrustedOrigins(
+  nodeEnv = env.NODE_ENV,
+  configuredOrigins: (string | undefined)[] = [env.FRONTEND_URL, ...env.ALLOWED_ORIGINS]
+): (string | RegExp)[] {
+  const isProd = nodeEnv === 'production';
+  const origins: (string | RegExp)[] = [];
 
-// Explicit list of trusted origins
-const trustedOrigins: (string | RegExp)[] = [
-  env.FRONTEND_URL,
-  ...env.ALLOWED_ORIGINS,
-];
+  // Parse FRONTEND_URL and ALLOWED_ORIGINS
+  const rawOrigins = configuredOrigins.filter(Boolean);
 
-// Permit localhost/127.0.0.1 development ports only when not in production
-if (!isProduction) {
-  trustedOrigins.push(/^http:\/\/(localhost|127\.0\.0\.1)(:[0-9]+)?$/);
+  for (const o of rawOrigins) {
+    const trimmed = typeof o === 'string' ? o.trim() : '';
+    if (!trimmed) continue;
+
+    // In production, strictly reject localhost / 127.0.0.1 even if misconfigured
+    const isLocal = /^https?:\/\/(localhost|127\.0\.0\.1)(:[0-9]+)?$/i.test(trimmed);
+    if (isProd && isLocal) {
+      console.warn(`[CORS Security] Discarded localhost origin "${trimmed}" in production environment.`);
+      continue;
+    }
+    origins.push(trimmed);
+  }
+
+  // Permit localhost/127.0.0.1 development ports only when not in production
+  if (!isProd) {
+    origins.push(/^http:\/\/(localhost|127\.0\.0\.1)(:[0-9]+)?$/);
+  }
+
+  return origins;
 }
 
-export function isOriginAllowed(origin: string | undefined): boolean {
+export function isOriginAllowed(
+  origin: string | undefined,
+  nodeEnv = env.NODE_ENV,
+  configuredOrigins?: (string | undefined)[]
+): boolean {
   if (!origin) return true; // Direct non-browser calls (e.g. curl, tests, mobile SDK)
-  return trustedOrigins.some(allowed => {
+  const trusted = getTrustedOrigins(nodeEnv, configuredOrigins);
+  if (trusted.length === 0) return false; // Missing or empty production configuration fails safely
+
+  return trusted.some(allowed => {
     if (typeof allowed === 'string') {
       return allowed.toLowerCase() === origin.toLowerCase();
     }
@@ -45,7 +90,7 @@ export function isOriginAllowed(origin: string | undefined): boolean {
 app.use(
   cors({
     origin: (origin, callback) => {
-      if (isOriginAllowed(origin)) {
+      if (isOriginAllowed(origin, env.NODE_ENV)) {
         callback(null, true);
       } else {
         const corsError = new Error(`CORS Security Policy: Origin "${origin}" is not permitted.`);
@@ -95,29 +140,31 @@ app.get('*', (req, res) => {
 // Centralized Error Handler
 app.use(errorHandler);
 
-// Start Server
-const server = app.listen(env.PORT, () => {
-  console.log(`=======================================================`);
-  console.log(` MediTrack Backend Server running on http://localhost:${env.PORT}`);
-  console.log(` Environment: ${env.NODE_ENV}`);
-  console.log(` Default Timezone: ${env.TIMEZONE}`);
-  console.log(` Frontend Served from: ${frontendDir}`);
-  console.log(`=======================================================`);
+// Start Server only when executed directly (not when imported in tests)
+if (require.main === module) {
+  const server = app.listen(env.PORT, () => {
+    console.log(`=======================================================`);
+    console.log(` MediTrack Backend Server running on http://localhost:${env.PORT}`);
+    console.log(` Environment: ${env.NODE_ENV}`);
+    console.log(` Default Timezone: ${env.TIMEZONE}`);
+    console.log(` Frontend Served from: ${frontendDir}`);
+    console.log(`=======================================================`);
 
-  // Start background scheduler
-  medicationScheduler.start();
-});
+    // Start background scheduler
+    medicationScheduler.start();
+  });
 
-// Graceful Shutdown
-process.on('SIGTERM', () => {
-  console.log('SIGTERM signal received: closing HTTP server');
-  server.close(() => console.log('HTTP server closed'));
-});
+  // Graceful Shutdown
+  process.on('SIGTERM', () => {
+    console.log('SIGTERM signal received: closing HTTP server');
+    server.close(() => console.log('HTTP server closed'));
+  });
 
-process.on('SIGINT', () => {
-  console.log('SIGINT signal received: closing HTTP server');
-  server.close(() => console.log('HTTP server closed'));
-});
+  process.on('SIGINT', () => {
+    console.log('SIGINT signal received: closing HTTP server');
+    server.close(() => console.log('HTTP server closed'));
+  });
+}
 
 export default app;
 

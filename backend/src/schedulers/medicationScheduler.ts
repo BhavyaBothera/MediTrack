@@ -2,6 +2,7 @@ import cron from 'node-cron';
 import { supabaseAdmin } from '../config/supabase';
 import { scheduleService } from '../services/scheduleService';
 import { notificationManager } from '../notifications/notificationManager';
+import { notificationOutbox } from '../notifications/notificationOutbox';
 import { formatTimeInTimezone } from '../utils/timezone';
 
 export class MedicationScheduler {
@@ -26,6 +27,13 @@ export class MedicationScheduler {
       this.isRunning = true;
 
       try {
+        // Step A: Recover stalled outbox jobs from any crashed worker processes
+        await notificationOutbox.recoverCrashedJobs();
+
+        // Step B: Process pending / retrying / released outbox deliveries
+        await notificationOutbox.processPending(notificationManager.getAllProviders());
+
+        // Step C: Execute medication schedule checks
         await this.processMedicationChecks();
       } catch (err: any) {
         console.error('[MedicationScheduler] Error in monitoring cycle:', err.message);
@@ -93,16 +101,25 @@ export class MedicationScheduler {
           continue;
         }
 
-        await notificationManager.notifyUser({
-          recipientId: dose.patient_id,
-          patientId: dose.patient_id,
-          doseId: dose.id,
-          medicineId: dose.medicine_id,
-          type: 'initial_reminder',
-          title: `Time to take ${medName}`,
-          message: `It is time for your scheduled medicine: ${medName} ${dosage} ${food}. Please take it and mark as taken in MediTrack.`,
-          severity: 'info',
-        });
+        try {
+          await notificationManager.notifyUser({
+            recipientId: dose.patient_id,
+            patientId: dose.patient_id,
+            doseId: dose.id,
+            medicineId: dose.medicine_id,
+            type: 'initial_reminder',
+            title: `Time to take ${medName}`,
+            message: `It is time for your scheduled medicine: ${medName} ${dosage} ${food}. Please take it and mark as taken in MediTrack.`,
+            severity: 'info',
+          });
+        } catch (notifErr: any) {
+          console.error(`[Scheduler] Failed to queue initial reminder for dose ${dose.id}:`, notifErr.message);
+          // Rollback atomic claim so scheduler retries on subsequent cycle
+          await supabaseAdmin
+            .from('scheduled_doses')
+            .update({ initial_reminder_sent: false })
+            .eq('id', dose.id);
+        }
       }
     }
 
@@ -143,16 +160,25 @@ export class MedicationScheduler {
           continue;
         }
 
-        await notificationManager.notifyUser({
-          recipientId: dose.patient_id,
-          patientId: dose.patient_id,
-          doseId: dose.id,
-          medicineId: dose.medicine_id,
-          type: 'follow_up_reminder',
-          title: `Follow-up: Did you take ${medName}?`,
-          message: `Friendly reminder: Your scheduled ${medName} was due at ${dose.scheduled_time}. If you haven't taken it yet, please take it now and mark it in MediTrack.`,
-          severity: 'warning',
-        });
+        try {
+          await notificationManager.notifyUser({
+            recipientId: dose.patient_id,
+            patientId: dose.patient_id,
+            doseId: dose.id,
+            medicineId: dose.medicine_id,
+            type: 'follow_up_reminder',
+            title: `Follow-up: Did you take ${medName}?`,
+            message: `Friendly reminder: Your scheduled ${medName} was due at ${dose.scheduled_time}. If you haven't taken it yet, please take it now and mark it in MediTrack.`,
+            severity: 'warning',
+          });
+        } catch (notifErr: any) {
+          console.error(`[Scheduler] Failed to queue follow-up reminder for dose ${dose.id}:`, notifErr.message);
+          // Rollback atomic claim so scheduler retries on subsequent cycle
+          await supabaseAdmin
+            .from('scheduled_doses')
+            .update({ follow_up_reminder_sent: false })
+            .eq('id', dose.id);
+        }
       }
     }
 
