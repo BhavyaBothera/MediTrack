@@ -18,17 +18,6 @@ export class ScheduleService {
     const timeZone = profile?.timezone || 'Asia/Kolkata';
     const today = targetDateStr || getTodayInTimezone(timeZone);
     const targetDate = new Date(today + 'T00:00:00Z');
-
-    // Fast path: check if doses already generated for today
-    const { count } = await supabaseAdmin
-      .from('scheduled_doses')
-      .select('id', { count: 'exact', head: true })
-      .eq('patient_id', patientId)
-      .eq('scheduled_date', today);
-
-    if (count && count > 0) {
-      return { created: 0, existing: count };
-    }
     
     // JS getDay(): 0=Sun, 1=Mon, ..., 6=Sat.
     // Our schema: 1=Mon, ..., 7=Sun

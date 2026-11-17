@@ -11,6 +11,7 @@
     "seed": "ts-node src/scripts/seed.ts",
     "clean-slate": "ts-node src/scripts/clean-slate.ts",
     "test:scheduler": "ts-node src/scripts/test-scheduler.ts",
+    "test:cors": "ts-node src/scripts/test-cors-security.ts",
     "test:e2e": "ts-node src/scripts/test-e2e.ts",
     "test:uat": "ts-node src/scripts/test-uat.ts",
     "test:browser": "ts-node src/scripts/test-browser-e2e.ts",

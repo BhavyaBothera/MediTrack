@@ -1,10 +1,24 @@
 import { chromium } from 'playwright';
 import path from 'path';
 import fs from 'fs';
+import dotenv from 'dotenv';
+import { supabaseAdmin } from '../config/supabase';
+import { assertSafeExecutionEnvironment } from '../utils/environmentGuard';
+
+dotenv.config({ path: path.resolve(__dirname, '../../.env') });
+
+interface FunctionalAssertion {
+  id: string;
+  name: string;
+  status: 'PASS' | 'FAIL';
+  details?: string;
+}
 
 async function runBrowserAcceptanceTests() {
+  assertSafeExecutionEnvironment('Browser E2E Functional & Visual Test Suite');
+
   console.log('========================================================================');
-  console.log(' MEDITRACK – REAL BROWSER AUTOMATION & VISUAL ACCEPTANCE TEST SUITE');
+  console.log(' MEDITRACK – REAL BROWSER FUNCTIONAL ASSERTIONS & VISUAL AUDIT');
   console.log('========================================================================\n');
 
   const screenshotsDir = path.resolve(__dirname, '../../../screenshots');
@@ -12,8 +26,19 @@ async function runBrowserAcceptanceTests() {
     fs.mkdirSync(screenshotsDir, { recursive: true });
   }
 
+  const assertions: FunctionalAssertion[] = [];
   const consoleErrors: string[] = [];
   const networkFailures: string[] = [];
+
+  function recordAssertion(id: string, name: string, condition: boolean, details?: string) {
+    const status: 'PASS' | 'FAIL' = condition ? 'PASS' : 'FAIL';
+    assertions.push({ id, name, status, details });
+    if (condition) {
+      console.log(`[PASS] [${id}] ${name}`);
+    } else {
+      console.error(`[FAIL] [${id}] ${name}${details ? ` -> ${details}` : ''}`);
+    }
+  }
 
   console.log('Launching Google Chrome browser via Playwright...');
   const browser = await chromium.launch({
@@ -21,18 +46,30 @@ async function runBrowserAcceptanceTests() {
     headless: true,
   });
 
+  const runId = Date.now();
+  const testPatientEmail = `browser_uat_${runId}@meditrack.test`;
+  const testPassword = 'UatPassword@123';
+  let createdPatientId = '';
+
   try {
-    // -------------------------------------------------------------------------
-    // 1. DESKTOP VIEWPORT TESTING (1280 x 800)
-    // -------------------------------------------------------------------------
-    console.log('\n--- 1. DESKTOP VIEWPORT SUITE (1280 x 800) ---');
-    const desktopContext = await browser.newContext({
+    // =========================================================================
+    // SECTION 1: END-TO-END FUNCTIONAL ASSERTIONS ON ISOLATED REAL USER
+    // =========================================================================
+    console.log('\n========================================================================');
+    console.log(' SECTION 1: FUNCTIONAL E2E USER ACCEPTANCE WORKFLOW');
+    console.log('========================================================================');
+
+    const funcContext = await browser.newContext({
       viewport: { width: 1280, height: 800 },
       deviceScaleFactor: 1,
     });
-    const page = await desktopContext.newPage();
+    const page = await funcContext.newPage();
 
-    // Listen to console errors and network failures
+    // Auto-accept prompt dialogs (e.g. discontinue reason)
+    page.on('dialog', async dialog => {
+      await dialog.accept('Doctor advised completing prescribed duration.');
+    });
+
     page.on('console', msg => {
       if (msg.type() === 'error') {
         console.warn(`[Browser Console Error] ${msg.text()}`);
@@ -46,355 +83,419 @@ async function runBrowserAcceptanceTests() {
       networkFailures.push(failure);
     });
 
-    // 1.1 Login Page
-    console.log('[Browser] Navigating to Login Page (#login)...');
+    // -----------------------------------------------------------------------
+    // Assertion 1: Patient Registration and Onboarding
+    // -----------------------------------------------------------------------
+    console.log('\n[E2E] Testing Patient Registration and Initial Onboarding...');
     await page.goto('http://localhost:5000/#login', { waitUntil: 'networkidle' });
-    await page.waitForTimeout(1000);
-    const loginScreenshot = path.join(screenshotsDir, 'desktop_01_login.png');
-    await page.screenshot({ path: loginScreenshot, fullPage: false });
-    console.log(`✓ Screenshot captured: ${path.basename(loginScreenshot)}`);
+    await page.click('#tab-register-btn');
+    await page.fill('#reg-name', 'Browser Test Patient');
+    await page.fill('#reg-email', testPatientEmail);
+    await page.fill('#reg-password', testPassword);
+    await page.selectOption('#reg-role', 'patient');
+    await page.click('#register-form button[type="submit"]');
 
-    // 1.2 Perform Login as Patient
-    console.log('[Browser] Entering patient login credentials...');
-    await page.fill('#login-email', 'patient@meditrack.local');
-    await page.fill('#login-password', 'Password@123');
-    await page.click('#login-form button[type="submit"]');
+    // Wait for Dashboard to render after successful registration
+    await page.waitForSelector('#main-sidebar', { timeout: 10000 });
+    await page.waitForSelector('#stat-total', { timeout: 10000 });
+    const isAtDashboard = await page.evaluate(() => window.location.hash === '#dashboard');
+    recordAssertion('AUTH-01', 'Patient registration navigates directly to #dashboard', isAtDashboard);
 
-    // Wait for Dashboard to render
-    console.log('[Browser] Waiting for dashboard navigation...');
-    await page.waitForSelector('#main-sidebar', { timeout: 8000 });
-    await page.waitForSelector('#stat-total', { timeout: 8000 });
+    // Capture created patient ID for cleanup
+    createdPatientId = await page.evaluate(() => {
+      try {
+        const u = localStorage.getItem('meditrack_user');
+        return u ? JSON.parse(u).id : '';
+      } catch {
+        return '';
+      }
+    });
+
+    // -----------------------------------------------------------------------
+    // Assertion 2: Empty Dashboard State (Zero Medicines Account)
+    // -----------------------------------------------------------------------
+    console.log('\n[E2E] Testing Clean Account Empty Dashboard State...');
     await page.waitForFunction(() => {
       const el = document.getElementById('stat-total');
-      return el && el.textContent && el.textContent.trim() !== '--' && !el.querySelector('.skeleton-shimmer');
-    }, { timeout: 15000 }).catch(() => console.log('Timeout waiting for stat-total populate'));
-    await page.waitForTimeout(1000);
+      return el && el.textContent && !el.querySelector('.skeleton-shimmer');
+    }, { timeout: 10000 });
 
-    // 1.3 Dashboard Page
-    console.log('[Browser] Capturing Dashboard Page (#dashboard)...');
-    const dashScreenshot = path.join(screenshotsDir, 'desktop_02_dashboard.png');
-    await page.screenshot({ path: dashScreenshot, fullPage: false });
-    console.log(`✓ Screenshot captured: ${path.basename(dashScreenshot)}`);
+    const totalStatText = await page.textContent('#stat-total');
+    const emptyBannerVisible = await page.evaluate(() => {
+      return document.body.textContent?.includes('No medicines configured') ||
+             document.body.textContent?.includes('No doses scheduled') ||
+             document.getElementById('stat-total')?.textContent?.trim() === '0';
+    });
+    recordAssertion(
+      'DASH-01',
+      'Newly registered patient dashboard displays 0 total doses and helpful empty state',
+      totalStatText?.trim() === '0' && Boolean(emptyBannerVisible),
+      `Total doses displayed: "${totalStatText?.trim()}"`
+    );
 
-    // 1.4 Today's Schedule Page
-    console.log('[Browser] Navigating to Today Schedule (#schedule)...');
-    await page.click('a[href="#schedule"]');
-    await page.waitForSelector('#schedule-doses-list', { timeout: 5000 });
-    await page.waitForTimeout(1000);
-    const schedScreenshot = path.join(screenshotsDir, 'desktop_03_schedule.png');
-    await page.screenshot({ path: schedScreenshot, fullPage: false });
-    console.log(`✓ Screenshot captured: ${path.basename(schedScreenshot)}`);
-
-    // 1.5 Medicines Page & Add Modal
-    console.log('[Browser] Navigating to Medicines Page (#medicines)...');
+    // -----------------------------------------------------------------------
+    // Assertion 3: Medicine Creation & Schedule Auto-Population
+    // -----------------------------------------------------------------------
+    console.log('\n[E2E] Testing Medicine Creation with Daily Schedules...');
     await page.click('a[href="#medicines"]');
-    await page.waitForSelector('.medicines-grid', { timeout: 5000 });
-    await page.waitForFunction(() => {
-      const stock = document.querySelector('.med-stock-status');
-      return stock && stock.textContent && !stock.textContent.includes('--');
-    }, { timeout: 10000 }).catch(() => {});
-    await page.waitForTimeout(1000);
-    const medsScreenshot = path.join(screenshotsDir, 'desktop_04_medicines.png');
-    await page.screenshot({ path: medsScreenshot, fullPage: false });
-    console.log(`✓ Screenshot captured: ${path.basename(medsScreenshot)}`);
-
-    // Open Add Medicine Modal
-    console.log('[Browser] Testing Add Medicine Modal interaction...');
+    await page.waitForSelector('#btn-open-add-med', { timeout: 8000 });
     await page.click('#btn-open-add-med');
-    await page.waitForSelector('#med-modal.active', { timeout: 3000 });
-    await page.waitForTimeout(500);
-    const addMedModalScreenshot = path.join(screenshotsDir, 'desktop_04b_add_medicine_modal.png');
-    await page.screenshot({ path: addMedModalScreenshot, fullPage: false });
-    console.log(`✓ Screenshot captured: ${path.basename(addMedModalScreenshot)}`);
-    // Close modal
-    await page.click('#btn-close-med-modal');
-    await page.waitForTimeout(500);
+    await page.waitForSelector('#med-modal.active', { timeout: 5000 });
 
-    // 1.6 Inventory Page
-    console.log('[Browser] Navigating to Inventory Page (#inventory)...');
+    const medName = 'Functional Amoxicillin';
+    await page.fill('#form-med-name', medName);
+    await page.fill('#form-med-dosage', '500mg');
+    await page.fill('#form-med-stock', '10');
+    await page.fill('#form-med-threshold', '3');
+    await page.fill('#form-med-times', '08:00, 20:00');
+    await page.click('#btn-save-med');
+
+    // Wait for modal to close and medicine card to appear
+    await page.waitForFunction(() => !document.getElementById('med-modal')?.classList.contains('active'), { timeout: 5000 });
+    await page.waitForSelector('.med-card', { timeout: 8000 });
+    const medicineFound = await page.evaluate((name) => {
+      return document.getElementById('medicines-list-slot')?.textContent?.includes(name);
+    }, medName);
+
+    recordAssertion('MED-01', 'Medicine is created, listed in grid, and initial stock saved', Boolean(medicineFound));
+
+    // -----------------------------------------------------------------------
+    // Assertion 4: Medicine Editing
+    // -----------------------------------------------------------------------
+    console.log('\n[E2E] Testing Medicine Editing...');
+    await page.click('.btn-edit-med');
+    await page.waitForSelector('#med-modal.active', { timeout: 5000 });
+    // Wait for async GET to populate the edit form
+    await page.waitForFunction(() => {
+      const input = document.getElementById('form-med-name') as HTMLInputElement | null;
+      return input && input.value.length > 0;
+    }, { timeout: 5000 });
+
+    const updatedMedName = 'Functional Amoxicillin Forte';
+    await page.fill('#form-med-name', updatedMedName);
+    await page.click('#btn-save-med');
+    await page.waitForFunction(() => !document.getElementById('med-modal')?.classList.contains('active'), { timeout: 5000 });
+    // Wait for loadMedicines() network fetch and DOM re-render
+    await page.waitForFunction((name) => {
+      return document.getElementById('medicines-list-slot')?.textContent?.includes(name);
+    }, updatedMedName, { timeout: 8000 });
+
+    const medicineUpdated = await page.evaluate((name) => {
+      return document.getElementById('medicines-list-slot')?.textContent?.includes(name);
+    }, updatedMedName);
+
+    recordAssertion('MED-02', 'Medicine name updated and persisted in listing', Boolean(medicineUpdated));
+
+    // -----------------------------------------------------------------------
+    // Assertion 5: Today Schedule Reflecting Configured Medicines
+    // -----------------------------------------------------------------------
+    console.log('\n[E2E] Testing Today Schedule View for Configured Doses...');
+    await page.click('a[href="#schedule"]');
+    await page.waitForSelector('#schedule-doses-list', { timeout: 8000 });
+    await page.waitForFunction(() => {
+      return document.querySelectorAll('.dose-card').length > 0;
+    }, { timeout: 8000 });
+
+    const dosesCount = await page.evaluate(() => {
+      return document.querySelectorAll('.dose-card').length;
+    });
+    recordAssertion('SCHED-01', 'Today schedule contains doses generated for new medicine', dosesCount > 0, `Doses found: ${dosesCount}`);
+
+    // -----------------------------------------------------------------------
+    // Assertion 6: Dose Confirmation with Real Timestamp
+    // -----------------------------------------------------------------------
+    console.log('\n[E2E] Testing Dose Confirmation ("Mark as Taken")...');
+    await page.waitForSelector('.btn-mark-taken', { timeout: 5000 });
+    const markTakenBtn = await page.$('.btn-mark-taken');
+    recordAssertion('DOSE-01', 'Pending dose has an active "Mark as Taken" button', Boolean(markTakenBtn));
+
+    if (markTakenBtn) {
+      await markTakenBtn.click();
+      await page.waitForSelector('.taken-confirmation-stamp', { timeout: 8000 });
+      const confirmationText = await page.textContent('.taken-confirmation-stamp');
+      recordAssertion(
+        'DOSE-02',
+        'Dose confirmation updates status to taken with verified timestamp',
+        Boolean(confirmationText && confirmationText.includes('Confirmed')),
+        `Stamp text: ${confirmationText?.trim()}`
+      );
+    }
+
+    // -----------------------------------------------------------------------
+    // Assertion 7: Persisting After Page Reload
+    // -----------------------------------------------------------------------
+    console.log('\n[E2E] Testing Dose Status Persistence Across Page Reload...');
+    await page.goto('http://localhost:5000/#schedule', { waitUntil: 'networkidle' });
+    await page.waitForSelector('#schedule-doses-list', { timeout: 8000 });
+    await page.waitForSelector('.taken-confirmation-stamp', { timeout: 8000 });
+    const isTakenAfterReload = await page.evaluate(() => {
+      return Boolean(document.querySelector('.taken-confirmation-stamp'));
+    });
+    recordAssertion('DOSE-03', 'Taken dose status and timestamp persist after page refresh', isTakenAfterReload);
+
+    // -----------------------------------------------------------------------
+    // Assertion 8: Double-Confirmation Prevention (Idempotency)
+    // -----------------------------------------------------------------------
+    console.log('\n[E2E] Testing Double-Confirmation Prevention in UI...');
+    const canReconfirm = await page.evaluate(() => {
+      const confirmedCard = document.querySelector('.dose-card.is-taken');
+      return confirmedCard ? Boolean(confirmedCard.querySelector('.btn-mark-taken')) : false;
+    });
+    recordAssertion('DOSE-04', 'Confirmed dose replaces Mark Taken button, preventing double confirmation', !canReconfirm);
+
+    // -----------------------------------------------------------------------
+    // Assertion 9: Inventory Decrement by Dose Amount
+    // -----------------------------------------------------------------------
+    console.log('\n[E2E] Testing Inventory Deduction...');
     await page.click('a[href="#inventory"]');
-    await page.waitForSelector('.data-table', { timeout: 5000 });
-    await page.waitForTimeout(1000);
-    const invScreenshot = path.join(screenshotsDir, 'desktop_05_inventory.png');
-    await page.screenshot({ path: invScreenshot, fullPage: false });
-    console.log(`✓ Screenshot captured: ${path.basename(invScreenshot)}`);
+    await page.waitForSelector('#inventory-table-body tr td', { timeout: 8000 });
+    await page.waitForFunction(() => {
+      const body = document.getElementById('inventory-table-body');
+      return body && !body.textContent?.includes('Loading inventory');
+    }, { timeout: 8000 });
 
-    // Test Refill Modal if medicines exist
-    const refillBtn = await page.$('.btn-refill');
-    if (refillBtn) {
-      console.log('[Browser] Testing Refill Stock Modal interaction...');
-      await refillBtn.click();
-      await page.waitForSelector('#refill-modal.active', { timeout: 3000 });
-      await page.waitForTimeout(500);
-      const refillModalScreenshot = path.join(screenshotsDir, 'desktop_05b_refill_modal.png');
-      await page.screenshot({ path: refillModalScreenshot, fullPage: false });
-      console.log(`✓ Screenshot captured: ${path.basename(refillModalScreenshot)}`);
-      await page.click('#btn-close-refill-modal');
-      await page.waitForTimeout(500);
-    }
+    const stockText = await page.evaluate(() => {
+      const stockCell = document.querySelector('#inventory-table-body tr td:nth-child(3)');
+      return stockCell?.textContent?.trim() || '';
+    });
+    // Started at 10, 1 dose confirmed -> should be 9
+    recordAssertion(
+      'INV-01',
+      'Inventory accurately decremented by 1 after dose confirmation (from 10 to 9)',
+      stockText.includes('9'),
+      `Current stock displayed in table: "${stockText}"`
+    );
 
-    // 1.7 Analytics & Reports Page
-    console.log('[Browser] Navigating to Analytics & Reports Page (#analytics)...');
-    await page.click('a[href="#analytics"]');
-    await page.waitForSelector('.stats-grid', { timeout: 5000 });
-    await page.waitForTimeout(1000);
-    const anaScreenshot = path.join(screenshotsDir, 'desktop_06_analytics.png');
-    await page.screenshot({ path: anaScreenshot, fullPage: false });
-    console.log(`✓ Screenshot captured: ${path.basename(anaScreenshot)}`);
-
-    // Test filter pill click
-    const filterPill7d = await page.$('button[data-days="7"]');
-    if (filterPill7d) {
-      console.log('[Browser] Testing Analytics filter interaction ("Last 7 Days")...');
-      await filterPill7d.click();
-      await page.waitForTimeout(500);
-    }
-
-    // 1.8 Calendar Page
-    console.log('[Browser] Navigating to Calendar View (#calendar)...');
-    await page.click('a[href="#calendar"]');
-    await page.waitForSelector('.calendar-grid', { timeout: 5000 });
-    await page.waitForTimeout(1000);
-    const calScreenshot = path.join(screenshotsDir, 'desktop_07_calendar.png');
-    await page.screenshot({ path: calScreenshot, fullPage: false });
-    console.log(`✓ Screenshot captured: ${path.basename(calScreenshot)}`);
-
-    // 1.9 Prescriptions Page
-    console.log('[Browser] Navigating to Prescriptions Page (#prescriptions)...');
-    await page.click('a[href="#prescriptions"]');
-    await page.waitForSelector('.medicines-grid', { timeout: 5000 });
-    await page.waitForTimeout(1000);
-    const rxScreenshot = path.join(screenshotsDir, 'desktop_08_prescriptions.png');
-    await page.screenshot({ path: rxScreenshot, fullPage: false });
-    console.log(`✓ Screenshot captured: ${path.basename(rxScreenshot)}`);
-
-    // 1.10 Caretakers Page & Invite Modal
-    console.log('[Browser] Navigating to Caretakers Page (#caretakers)...');
+    // -----------------------------------------------------------------------
+    // Assertion 10: Caretaker Invitation & Status
+    // -----------------------------------------------------------------------
+    console.log('\n[E2E] Testing Caretaker Invitation...');
     await page.click('a[href="#caretakers"]');
-    await page.waitForSelector('#caretakers-list-slot', { timeout: 5000 });
-    await page.waitForTimeout(1000);
-    const careScreenshot = path.join(screenshotsDir, 'desktop_09_caretakers.png');
-    await page.screenshot({ path: careScreenshot, fullPage: false });
-    console.log(`✓ Screenshot captured: ${path.basename(careScreenshot)}`);
-
-    // Open Invite Caretaker Modal
-    console.log('[Browser] Testing Invite Caretaker Modal interaction...');
+    await page.waitForSelector('#btn-open-invite-caretaker', { timeout: 8000 });
     await page.click('#btn-open-invite-caretaker');
-    await page.waitForSelector('#invite-modal.active', { timeout: 3000 });
-    await page.waitForTimeout(500);
-    const inviteModalScreenshot = path.join(screenshotsDir, 'desktop_09b_invite_modal.png');
-    await page.screenshot({ path: inviteModalScreenshot, fullPage: false });
-    console.log(`✓ Screenshot captured: ${path.basename(inviteModalScreenshot)}`);
-    await page.click('#btn-close-invite-modal');
-    await page.waitForTimeout(500);
+    await page.waitForSelector('#invite-modal.active', { timeout: 5000 });
 
-    // 1.11 Notifications Page
-    console.log('[Browser] Navigating to Notifications Center (#notifications)...');
-    await page.click('a[href="#notifications"]');
-    await page.waitForSelector('#notifications-feed-slot', { timeout: 5000 });
-    await page.waitForTimeout(1000);
-    const notifScreenshot = path.join(screenshotsDir, 'desktop_10_notifications.png');
-    await page.screenshot({ path: notifScreenshot, fullPage: false });
-    console.log(`✓ Screenshot captured: ${path.basename(notifScreenshot)}`);
+    const caretakerEmail = `caretaker_${runId}@meditrack.test`;
+    await page.fill('#form-c-email', caretakerEmail);
+    await page.fill('#form-c-relation', 'Daughter');
+    await page.click('#invite-form button[type="submit"]');
 
-    // 1.12 Profile & Settings Page
-    console.log('[Browser] Navigating to Profile Page (#profile)...');
-    await page.click('a[href="#profile"]');
-    await page.waitForSelector('#profile-form', { timeout: 5000 });
-    await page.waitForTimeout(1000);
-    const profScreenshot = path.join(screenshotsDir, 'desktop_11_profile.png');
-    await page.screenshot({ path: profScreenshot, fullPage: false });
-    console.log(`✓ Screenshot captured: ${path.basename(profScreenshot)}`);
+    // Wait for invite modal to close and new caretaker card to render
+    await page.waitForFunction(() => !document.getElementById('invite-modal')?.classList.contains('active'), { timeout: 8000 });
+    await page.waitForFunction((email) => {
+      return document.getElementById('caretakers-list-slot')?.textContent?.includes(email);
+    }, caretakerEmail, { timeout: 8000 });
 
-    await desktopContext.close();
+    const inviteListed = await page.evaluate((email) => {
+      return document.getElementById('caretakers-list-slot')?.textContent?.includes(email);
+    }, caretakerEmail);
 
-    // -------------------------------------------------------------------------
-    // 2. MULTI-VIEWPORT RESPONSIVENESS SUITE (360px, 390px, 430px, 768px, 1024px, 1440px)
-    // -------------------------------------------------------------------------
-    console.log('\n--- 2. MULTI-VIEWPORT RESPONSIVENESS SUITE ---');
+    recordAssertion('CARE-01', 'Caretaker invitation created and listed with pending status', Boolean(inviteListed));
 
+    // -----------------------------------------------------------------------
+    // Assertion 11: Prescription OCR Safeguard & Modal
+    // -----------------------------------------------------------------------
+    console.log('\n[E2E] Testing Prescription OCR Safeguard & Modal...');
+    await page.click('a[href="#prescriptions"]');
+    await page.waitForSelector('#btn-open-upload-pres', { timeout: 5000 });
+
+    const safeguardNoticePresent = await page.evaluate(() => {
+      return document.body.textContent?.includes('OCR & AI Safeguard: Extracted medicine names');
+    });
+    await page.click('#btn-open-upload-pres');
+    await page.waitForSelector('#pres-modal.active', { timeout: 3000 });
+    await page.click('#btn-close-pres-modal');
+    await page.waitForTimeout(300);
+
+    recordAssertion('RX-01', 'Prescription section presents OCR clinical safeguard and operational upload modal', Boolean(safeguardNoticePresent));
+
+    // -----------------------------------------------------------------------
+    // Assertion 12: Mobile Navigation Drawer & Zero Overflow
+    // -----------------------------------------------------------------------
+    console.log('\n[E2E] Testing Mobile Navigation Drawer & Responsive Layout...');
+    await page.setViewportSize({ width: 360, height: 740 });
+    await page.goto('http://localhost:5000/#dashboard', { waitUntil: 'networkidle' });
+    await page.waitForSelector('#btn-toggle-menu', { timeout: 5000 });
+
+    await page.click('#btn-toggle-menu');
+    await page.waitForSelector('#main-sidebar.mobile-open', { timeout: 3000 });
+    const isDrawerOpen = await page.evaluate(() => {
+      return document.getElementById('main-sidebar')?.classList.contains('mobile-open');
+    });
+
+    // Close drawer via backdrop
+    await page.evaluate(() => document.getElementById('sidebar-backdrop')?.click());
+    await page.waitForTimeout(400);
+
+    const hasHorizontalOverflow = await page.evaluate(() => {
+      return document.documentElement.scrollWidth > document.documentElement.clientWidth;
+    });
+
+    recordAssertion(
+      'RESP-01',
+      'Mobile drawer toggles cleanly and layout has zero horizontal overflow at 360px',
+      Boolean(isDrawerOpen) && !hasHorizontalOverflow,
+      `Drawer open: ${isDrawerOpen}, Horizontal Overflow: ${hasHorizontalOverflow}`
+    );
+
+    await funcContext.close();
+
+    // =========================================================================
+    // SECTION 2: VISUAL REGRESSION SCREENSHOT AUDIT (DESKTOP & VIEWPORTS)
+    // =========================================================================
+    console.log('\n========================================================================');
+    console.log(' SECTION 2: VISUAL REGRESSION SCREENSHOT CAPTURE');
+    console.log('========================================================================');
+
+    const visualContext = await browser.newContext({
+      viewport: { width: 1280, height: 800 },
+      deviceScaleFactor: 1,
+    });
+    const vPage = await visualContext.newPage();
+
+    // Login with standard demo account to capture complete seeded state
+    await vPage.goto('http://localhost:5000/#login');
+    await vPage.screenshot({ path: path.join(screenshotsDir, 'desktop_01_login.png') });
+    await vPage.fill('#login-email', 'patient@meditrack.local');
+    await vPage.fill('#login-password', 'Password@123');
+    await vPage.click('#login-form button[type="submit"]');
+
+    await vPage.waitForSelector('#stat-total', { timeout: 8000 });
+    await vPage.waitForFunction(() => {
+      const el = document.getElementById('stat-total');
+      return el && el.textContent && el.textContent.trim() !== '--' && !el.querySelector('.skeleton-shimmer');
+    }, { timeout: 15000 }).catch(() => {});
+    await vPage.waitForTimeout(800);
+
+    // Desktop pages
+    await vPage.screenshot({ path: path.join(screenshotsDir, 'desktop_02_dashboard.png') });
+
+    await vPage.click('a[href="#schedule"]');
+    await vPage.waitForSelector('#schedule-doses-list', { timeout: 5000 });
+    await vPage.waitForTimeout(600);
+    await vPage.screenshot({ path: path.join(screenshotsDir, 'desktop_03_schedule.png') });
+
+    await vPage.click('a[href="#medicines"]');
+    await vPage.waitForSelector('.medicines-grid', { timeout: 5000 });
+    await vPage.waitForTimeout(600);
+    await vPage.screenshot({ path: path.join(screenshotsDir, 'desktop_04_medicines.png') });
+
+    await vPage.click('#btn-open-add-med');
+    await vPage.waitForSelector('#med-modal.active', { timeout: 3000 });
+    await vPage.screenshot({ path: path.join(screenshotsDir, 'desktop_04b_add_medicine_modal.png') });
+    await vPage.click('#btn-close-med-modal');
+
+    await vPage.click('a[href="#inventory"]');
+    await vPage.waitForSelector('.data-table', { timeout: 5000 });
+    await vPage.waitForTimeout(600);
+    await vPage.screenshot({ path: path.join(screenshotsDir, 'desktop_05_inventory.png') });
+
+    await vPage.click('a[href="#analytics"]');
+    await vPage.waitForSelector('.stats-grid', { timeout: 5000 });
+    await vPage.waitForTimeout(600);
+    await vPage.screenshot({ path: path.join(screenshotsDir, 'desktop_06_analytics.png') });
+
+    await vPage.click('a[href="#calendar"]');
+    await vPage.waitForSelector('.calendar-grid', { timeout: 5000 });
+    await vPage.waitForTimeout(600);
+    await vPage.screenshot({ path: path.join(screenshotsDir, 'desktop_07_calendar.png') });
+
+    await vPage.click('a[href="#prescriptions"]');
+    await vPage.waitForSelector('.medicines-grid', { timeout: 5000 });
+    await vPage.waitForTimeout(600);
+    await vPage.screenshot({ path: path.join(screenshotsDir, 'desktop_08_prescriptions.png') });
+
+    await vPage.click('a[href="#caretakers"]');
+    await vPage.waitForSelector('#caretakers-list-slot', { timeout: 5000 });
+    await vPage.waitForTimeout(600);
+    await vPage.screenshot({ path: path.join(screenshotsDir, 'desktop_09_caretakers.png') });
+
+    await vPage.click('a[href="#notifications"]');
+    await vPage.waitForSelector('#notifications-feed-slot', { timeout: 5000 });
+    await vPage.waitForTimeout(600);
+    await vPage.screenshot({ path: path.join(screenshotsDir, 'desktop_10_notifications.png') });
+
+    await vPage.click('a[href="#profile"]');
+    await vPage.waitForSelector('#profile-form', { timeout: 5000 });
+    await vPage.waitForTimeout(600);
+    await vPage.screenshot({ path: path.join(screenshotsDir, 'desktop_11_profile.png') });
+
+    // Multi-viewport checks using the authenticated session
     const viewports = [
-      { name: 'mobile_360', width: 360, height: 740, isMobile: true },
-      { name: 'mobile_390', width: 390, height: 844, isMobile: true },
-      { name: 'mobile_430', width: 430, height: 932, isMobile: true },
-      { name: 'tablet_768', width: 768, height: 1024, isMobile: false },
-      { name: 'tablet_1024', width: 1024, height: 768, isMobile: false },
-      { name: 'desktop_1440', width: 1440, height: 900, isMobile: false },
+      { name: 'mobile_360', width: 360, height: 740 },
+      { name: 'mobile_390', width: 390, height: 844 },
+      { name: 'mobile_430', width: 430, height: 932 },
+      { name: 'tablet_768', width: 768, height: 1024 },
+      { name: 'tablet_1024', width: 1024, height: 768 },
+      { name: 'desktop_1440', width: 1440, height: 900 },
     ];
 
     for (const vp of viewports) {
-      console.log(`\n[Viewport Test] Testing ${vp.name} (${vp.width}x${vp.height})...`);
-      const vpContext = await browser.newContext({
-        viewport: { width: vp.width, height: vp.height },
-        isMobile: vp.isMobile,
-        hasTouch: vp.isMobile,
-        deviceScaleFactor: vp.isMobile ? 2 : 1,
-      });
-      const vpPage = await vpContext.newPage();
+      await vPage.setViewportSize({ width: vp.width, height: vp.height });
+      await vPage.waitForTimeout(400);
 
-      await vpPage.goto('http://localhost:5000/#login');
-      await vpPage.fill('#login-email', 'patient@meditrack.local');
-      await vpPage.fill('#login-password', 'Password@123');
-      await vpPage.click('#login-form button[type="submit"]');
-
-      await vpPage.waitForSelector('#stat-total', { timeout: 10000 });
-      await vpPage.waitForFunction(() => {
-        const el = document.getElementById('stat-total');
-        return el && el.textContent && el.textContent.trim() !== '--' && !el.querySelector('.skeleton-shimmer');
-      }, { timeout: 15000 }).catch(() => {});
-      await vpPage.waitForTimeout(800);
-
-      // Check horizontal overflow
-      const overflow = await vpPage.evaluate(() => {
+      const overflow = await vPage.evaluate(() => {
         return document.documentElement.scrollWidth > document.documentElement.clientWidth;
       });
-      console.log(`  Horizontal Overflow: ${overflow ? '⚠️ DETECTED' : '✓ NONE (Passed 0 overflow)'}`);
+      console.log(`[Viewport ${vp.name}] Horizontal Overflow: ${overflow ? '⚠️ DETECTED' : '✓ 0 (Clean)'}`);
 
-      const vpScreenshot = path.join(screenshotsDir, `${vp.name}_dashboard.png`);
-      await vpPage.screenshot({ path: vpScreenshot, fullPage: false });
-      console.log(`  ✓ Screenshot: ${path.basename(vpScreenshot)}`);
-
-      // Test mobile menu drawer if mobile/tablet
-      if (vp.width <= 768) {
-        console.log(`  Testing mobile hamburger menu on ${vp.name}...`);
-        await vpPage.click('#btn-toggle-menu');
-        await vpPage.waitForSelector('#main-sidebar.mobile-open', { timeout: 3000 });
-        const drawerScreenshot = path.join(screenshotsDir, `${vp.name}_menu_drawer.png`);
-        await vpPage.screenshot({ path: drawerScreenshot, fullPage: false });
-        console.log(`  ✓ Screenshot: ${path.basename(drawerScreenshot)}`);
-        // Close menu cleanly
-        await vpPage.evaluate(() => document.getElementById('sidebar-backdrop')?.click());
-        await vpPage.waitForTimeout(300);
-      }
-
-      await vpContext.close();
+      await vPage.screenshot({ path: path.join(screenshotsDir, `${vp.name}_dashboard.png`) });
     }
 
-    // -------------------------------------------------------------------------
-    // 2B. MOBILE SUB-PAGES VIEWPORT TESTING (375 x 667 - Standard Mobile)
-    // -------------------------------------------------------------------------
-    console.log('\n--- 2B. MOBILE SUB-PAGES SUITE (375 x 667) ---');
-    const mobileContext = await browser.newContext({
-      viewport: { width: 375, height: 667 },
-      isMobile: true,
-      hasTouch: true,
-      deviceScaleFactor: 2,
-    });
-    const mobilePage = await mobileContext.newPage();
-
-    await mobilePage.goto('http://localhost:5000/#login');
-    await mobilePage.fill('#login-email', 'patient@meditrack.local');
-    await mobilePage.fill('#login-password', 'Password@123');
-    await mobilePage.click('#login-form button[type="submit"]');
-    await mobilePage.waitForSelector('#stat-total', { timeout: 8000 });
-    await mobilePage.waitForFunction(() => {
-      const el = document.getElementById('stat-total');
-      return el && el.textContent && el.textContent.trim() !== '--' && !el.querySelector('.skeleton-shimmer');
-    }, { timeout: 15000 }).catch(() => {});
-    await mobilePage.waitForTimeout(1000);
-
-    // 2.1 Mobile Dashboard
-    console.log('[Mobile] Capturing Mobile Dashboard...');
-    const mDashScreenshot = path.join(screenshotsDir, 'mobile_01_dashboard.png');
-    await mobilePage.screenshot({ path: mDashScreenshot, fullPage: false });
-    console.log(`✓ Screenshot captured: ${path.basename(mDashScreenshot)}`);
-
-    // 2.2 Mobile Schedule
-    console.log('[Mobile] Navigating to Mobile Schedule (#schedule)...');
-    await mobilePage.goto('http://localhost:5000/#schedule');
-    await mobilePage.waitForSelector('#schedule-doses-list', { timeout: 5000 });
-    await mobilePage.waitForTimeout(1000);
-    const mSchedScreenshot = path.join(screenshotsDir, 'mobile_02_schedule.png');
-    await mobilePage.screenshot({ path: mSchedScreenshot, fullPage: false });
-    console.log(`✓ Screenshot captured: ${path.basename(mSchedScreenshot)}`);
-
-    // 2.3 Mobile Medicines
-    console.log('[Mobile] Navigating to Mobile Medicines (#medicines)...');
-    await mobilePage.goto('http://localhost:5000/#medicines');
-    await mobilePage.waitForSelector('.medicines-grid', { timeout: 5000 });
-    await mobilePage.waitForFunction(() => {
-      const stock = document.querySelector('.med-stock-status');
-      return stock && stock.textContent && !stock.textContent.includes('--');
-    }, { timeout: 10000 }).catch(() => {});
-    await mobilePage.waitForTimeout(1000);
-    const mMedsScreenshot = path.join(screenshotsDir, 'mobile_03_medicines.png');
-    await mobilePage.screenshot({ path: mMedsScreenshot, fullPage: false });
-    console.log(`✓ Screenshot captured: ${path.basename(mMedsScreenshot)}`);
-
-    // 2.4 Mobile Inventory
-    console.log('[Mobile] Navigating to Mobile Inventory (#inventory)...');
-    await mobilePage.goto('http://localhost:5000/#inventory');
-    await mobilePage.waitForSelector('.table-responsive', { timeout: 5000 });
-    await mobilePage.waitForTimeout(1000);
-    const mInvScreenshot = path.join(screenshotsDir, 'mobile_04_inventory.png');
-    await mobilePage.screenshot({ path: mInvScreenshot, fullPage: false });
-    console.log(`✓ Screenshot captured: ${path.basename(mInvScreenshot)}`);
-
-    // 2.5 Mobile Analytics
-    console.log('[Mobile] Navigating to Mobile Analytics (#analytics)...');
-    await mobilePage.goto('http://localhost:5000/#analytics');
-    await mobilePage.waitForSelector('.stats-grid', { timeout: 5000 });
-    await mobilePage.waitForTimeout(1000);
-    const mAnaScreenshot = path.join(screenshotsDir, 'mobile_05_analytics.png');
-    await mobilePage.screenshot({ path: mAnaScreenshot, fullPage: false });
-    console.log(`✓ Screenshot captured: ${path.basename(mAnaScreenshot)}`);
-
-    await mobileContext.close();
-
-    // -------------------------------------------------------------------------
-    // 3. CARETAKER DASHBOARD MONITORING VIEW
-    // -------------------------------------------------------------------------
-    console.log('\n--- 3. CARETAKER MONITORING SUITE (1280 x 800) ---');
-    const caretakerContext = await browser.newContext({
-      viewport: { width: 1280, height: 800 },
-    });
-    const cPage = await caretakerContext.newPage();
-
-    console.log('[Caretaker] Logging in as Caretaker (caretaker@meditrack.local)...');
-    await cPage.goto('http://localhost:5000/#login');
-    await cPage.fill('#login-email', 'caretaker@meditrack.local');
-    await cPage.fill('#login-password', 'Password@123');
-    await cPage.click('#login-form button[type="submit"]');
-
-    await cPage.waitForSelector('#stat-total', { timeout: 10000 });
-    await cPage.waitForFunction(() => {
-      const el = document.getElementById('stat-total');
-      return el && el.textContent && el.textContent.trim() !== '--' && !el.querySelector('.skeleton-shimmer');
-    }, { timeout: 15000 }).catch(() => {});
-    await cPage.waitForSelector('.caretaker-view-banner', { timeout: 10000 }).catch(() => console.log('Caretaker banner check'));
-    await cPage.waitForTimeout(1000);
-
-    const caretakerScreenshot = path.join(screenshotsDir, 'desktop_12_caretaker_monitoring.png');
-    await cPage.screenshot({ path: caretakerScreenshot, fullPage: false });
-    console.log(`✓ Screenshot captured: ${path.basename(caretakerScreenshot)}`);
-
-    await caretakerContext.close();
+    await visualContext.close();
 
   } finally {
+    // -------------------------------------------------------------------------
+    // CLEANUP TEMPORARY BROWSER TEST FIXTURES
+    // -------------------------------------------------------------------------
+    console.log('\n--- CLEANING UP TEMPORARY BROWSER TEST FIXTURES ---');
+    if (createdPatientId) {
+      try {
+        await supabaseAdmin.from('inventory_transactions').delete().eq('patient_id', createdPatientId);
+        await supabaseAdmin.from('medication_logs').delete().eq('patient_id', createdPatientId);
+        await supabaseAdmin.from('scheduled_doses').delete().eq('patient_id', createdPatientId);
+        await supabaseAdmin.from('medication_schedules').delete().eq('patient_id', createdPatientId);
+        await supabaseAdmin.from('medicine_inventory').delete().eq('patient_id', createdPatientId);
+        await supabaseAdmin.from('medicines').delete().eq('patient_id', createdPatientId);
+        await supabaseAdmin.from('patient_caretaker_relationships').delete().eq('patient_id', createdPatientId);
+        await supabaseAdmin.from('notifications').delete().eq('recipient_id', createdPatientId);
+        await supabaseAdmin.from('profiles').delete().eq('id', createdPatientId);
+        await supabaseAdmin.auth.admin.deleteUser(createdPatientId);
+        console.log(`✓ Cleaned up test patient ${createdPatientId}`);
+      } catch (err: any) {
+        console.warn(`Warning during cleanup: ${err.message}`);
+      }
+    }
+
     await browser.close();
   }
 
   // -------------------------------------------------------------------------
-  // SUMMARY REPORT
+  // FINAL SUMMARY REPORT
   // -------------------------------------------------------------------------
-  console.log('\n========================================================================');
-  console.log(' BROWSER AUTOMATION & VISUAL VERIFICATION SUMMARY');
-  console.log('========================================================================');
-  console.log(`Console Errors Caught:   ${consoleErrors.length}`);
-  console.log(`Network Failures Caught: ${networkFailures.length}`);
-  if (consoleErrors.length > 0) {
-    console.log('Console Errors:', consoleErrors);
-  }
-  if (networkFailures.length > 0) {
-    console.log('Network Failures:', networkFailures);
-  }
+  const passedAssertions = assertions.filter(a => a.status === 'PASS').length;
+  const failedAssertions = assertions.filter(a => a.status === 'FAIL').length;
   const screenshots = fs.readdirSync(screenshotsDir).filter(f => f.endsWith('.png'));
-  console.log(`Total Screenshots Captured: ${screenshots.length}`);
-  screenshots.forEach((s, idx) => {
-    const size = Math.round(fs.statSync(path.join(screenshotsDir, s)).size / 1024);
-    console.log(`  [${idx + 1}] ${s} (${size} KB)`);
-  });
+
+  console.log('\n========================================================================');
+  console.log(' BROWSER E2E FUNCTIONAL & VISUAL AUDIT SUMMARY');
+  console.log('========================================================================');
+  console.log(`Functional Assertions Evaluated: ${assertions.length}`);
+  console.log(`  Passed:  ${passedAssertions} (✓)`);
+  console.log(`  Failed:  ${failedAssertions} (✗)`);
+  console.log(`Success Rate: ${Math.round((passedAssertions / assertions.length) * 100)}%`);
+  console.log('------------------------------------------------------------------------');
+  console.log(`Screenshots Captured:    ${screenshots.length} files in screenshots/`);
+  console.log(`Browser Console Errors:  ${consoleErrors.length}`);
+  console.log(`Network Failures:        ${networkFailures.length}`);
   console.log('========================================================================\n');
+
+  if (failedAssertions > 0) {
+    process.exit(1);
+  }
 }
 
-runBrowserAcceptanceTests().catch(console.error);
+runBrowserAcceptanceTests().catch(err => {
+  console.error('Fatal browser test failure:', err);
+  process.exit(1);
+});

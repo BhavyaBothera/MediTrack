@@ -79,11 +79,19 @@ export class MedicationScheduler {
         const dosage = med?.prescribed_dosage || '';
         const food = med?.food_timing ? `(${med.food_timing.replace('_', ' ')})` : '';
 
-        // Mark as sent first to prevent race condition
-        await supabaseAdmin
+        // Atomic database claim: only proceed if initial_reminder_sent is STILL false.
+        // In a multi-instance deployment, this atomic conditional update acts as a distributed row-level lock.
+        const { data: claimed, error: claimErr } = await supabaseAdmin
           .from('scheduled_doses')
           .update({ initial_reminder_sent: true })
-          .eq('id', dose.id);
+          .eq('id', dose.id)
+          .eq('initial_reminder_sent', false)
+          .select('id');
+
+        if (claimErr || !claimed || claimed.length === 0) {
+          // Another instance or thread already claimed and sent this reminder
+          continue;
+        }
 
         await notificationManager.notifyUser({
           recipientId: dose.patient_id,
@@ -122,10 +130,18 @@ export class MedicationScheduler {
       for (const dose of followUpsDue) {
         const medName = (dose as any).medicines?.name || 'Medicine';
 
-        await supabaseAdmin
+        // Atomic database claim: only proceed if follow_up_reminder_sent is STILL false.
+        const { data: claimed, error: claimErr } = await supabaseAdmin
           .from('scheduled_doses')
           .update({ follow_up_reminder_sent: true })
-          .eq('id', dose.id);
+          .eq('id', dose.id)
+          .eq('follow_up_reminder_sent', false)
+          .select('id');
+
+        if (claimErr || !claimed || claimed.length === 0) {
+          // Another instance already claimed and sent this follow-up reminder
+          continue;
+        }
 
         await notificationManager.notifyUser({
           recipientId: dose.patient_id,
@@ -171,14 +187,22 @@ export class MedicationScheduler {
         const medName = med?.name || 'Medicine';
         const patientName = patient?.full_name || 'Your patient';
 
-        // 1. Mark dose as overdue in database
-        await supabaseAdmin
+        // 1. Mark dose as overdue in database atomically:
+        // Only proceed if status is STILL 'pending' and caretaker_alert_sent is false
+        const { data: claimed, error: claimErr } = await supabaseAdmin
           .from('scheduled_doses')
           .update({
             status: 'overdue',
             caretaker_alert_sent: true,
           })
-          .eq('id', dose.id);
+          .eq('id', dose.id)
+          .eq('status', 'pending')
+          .select('id');
+
+        if (claimErr || !claimed || claimed.length === 0) {
+          // Another instance or user action already transitioned this dose
+          continue;
+        }
 
         // 2. Alert the patient that dose is overdue
         await notificationManager.notifyUser({

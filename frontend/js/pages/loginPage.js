@@ -3,6 +3,10 @@ import { router } from '../router.js';
 
 export const loginPage = {
   render() {
+    const isLocalDev = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    const defaultEmail = isLocalDev ? 'patient@meditrack.local' : '';
+    const defaultPassword = isLocalDev ? 'Password@123' : '';
+
     return `
       <div style="display:flex; align-items:center; justify-content:center; min-height:80vh;">
         <div style="background:var(--bg-surface); border:1px solid var(--border-color); border-radius:var(--radius-xl); padding:40px; width:100%; max-width:440px; box-shadow:var(--shadow-lg);">
@@ -21,23 +25,25 @@ export const loginPage = {
           <form id="login-form">
             <div class="form-group">
               <label class="form-label">Email Address</label>
-              <input type="email" id="login-email" class="form-control" placeholder="you@example.com" required value="patient@meditrack.local" />
+              <input type="email" id="login-email" class="form-control" placeholder="you@example.com" required value="${defaultEmail}" />
             </div>
             <div class="form-group">
               <label class="form-label">Password</label>
-              <input type="password" id="login-password" class="form-control" placeholder="••••••••" required value="Password@123" />
+              <input type="password" id="login-password" class="form-control" placeholder="••••••••" required value="${defaultPassword}" />
             </div>
             <button type="submit" class="btn btn-primary" style="width:100%; margin-top:10px;">Sign In</button>
 
-            <!-- Quick Demo Fill -->
-            <div style="margin-top:20px; padding:12px; background:var(--bg-surface-alt); border-radius:var(--radius-md); font-size:12px;">
-              <p style="font-weight:600; margin-bottom:6px; color:var(--text-secondary);">Testing Demo Accounts (Sandbox Only):</p>
+            <!-- Quick Demo Fill (Development Sandbox Only) -->
+            ${isLocalDev ? `
+            <div id="demo-accounts-box" style="margin-top:20px; padding:12px; background:var(--bg-surface-alt); border-radius:var(--radius-md); font-size:12px; border:1px dashed var(--border-color);">
+              <p style="font-weight:600; margin-bottom:6px; color:var(--text-secondary);">Testing Demo Accounts (Local Sandbox Only):</p>
               <div style="display:flex; gap:8px;">
                 <button type="button" id="btn-fill-patient" class="btn btn-secondary btn-sm" style="flex:1;">👤 Demo Patient</button>
                 <button type="button" id="btn-fill-caretaker" class="btn btn-secondary btn-sm" style="flex:1;">🛡️ Demo Caretaker</button>
               </div>
-              <p style="font-size:11px; color:var(--text-muted); margin-top:6px;">For real usage, please switch to the <strong>Register</strong> tab to create your own secure personal account.</p>
+              <p style="font-size:11px; color:var(--text-muted); margin-top:6px;">For real usage, switch to the <strong>Register</strong> tab to create a personal account.</p>
             </div>
+            ` : ''}
           </form>
 
           <!-- Register Form (Hidden by default) -->

@@ -3,10 +3,14 @@ import dotenv from 'dotenv';
 import { supabaseAdmin } from '../config/supabase';
 import { medicineService } from '../services/medicineService';
 import { scheduleService } from '../services/scheduleService';
+import { assertSafeExecutionEnvironment } from '../utils/environmentGuard';
 
 dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 
 async function seed() {
+  // Production Environment Guard: refuse to seed fictional mock data in production
+  assertSafeExecutionEnvironment('Database Seed');
+
   console.log('--- MediTrack Development Setup & Verification Seed ---');
   const isEmpty = process.argv.includes('--empty');
 
@@ -15,14 +19,31 @@ async function seed() {
   const password = 'Password@123';
 
   console.log('Ensuring development demo patient user...');
-  const { data: patientAuth } = await supabaseAdmin.auth.admin.createUser({
+  const { data: patientAuth, error: createErr } = await supabaseAdmin.auth.admin.createUser({
     email: patientEmail,
     password,
     email_confirm: true,
     user_metadata: { full_name: 'Demo Patient (Test Account)', role: 'patient' },
   });
+  if (createErr) {
+    console.log(`createUser info: ${createErr.message}`);
+  }
 
-  const patientId = patientAuth.user?.id || (await supabaseAdmin.from('profiles').select('id').eq('email', patientEmail).single()).data?.id;
+  let patientId = patientAuth?.user?.id;
+  if (!patientId) {
+    const { data: listData, error: listErr } = await supabaseAdmin.auth.admin.listUsers();
+    if (listErr) {
+      console.log(`listUsers error: ${listErr.message}`);
+    }
+    patientId = listData?.users?.find(u => u.email === patientEmail)?.id;
+  }
+  if (!patientId) {
+    const { data: prof, error: profErr } = await supabaseAdmin.from('profiles').select('id').eq('email', patientEmail).single();
+    if (profErr) {
+      console.log(`profiles select error: ${profErr.message}`);
+    }
+    patientId = prof?.id;
+  }
 
   if (!patientId) {
     console.error('Failed to obtain patient ID');
@@ -61,7 +82,15 @@ async function seed() {
     user_metadata: { full_name: 'Demo Caretaker (Test Account)', role: 'caretaker' },
   });
 
-  const caretakerId = cAuth.user?.id || (await supabaseAdmin.from('profiles').select('id').eq('email', caretakerEmail).single()).data?.id;
+  let caretakerId = cAuth.user?.id;
+  if (!caretakerId) {
+    const { data: listData } = await supabaseAdmin.auth.admin.listUsers();
+    caretakerId = listData?.users.find(u => u.email === caretakerEmail)?.id;
+  }
+  if (!caretakerId) {
+    const { data: prof } = await supabaseAdmin.from('profiles').select('id').eq('email', caretakerEmail).single();
+    caretakerId = prof?.id;
+  }
 
   if (caretakerId) {
     await supabaseAdmin.from('profiles').upsert({

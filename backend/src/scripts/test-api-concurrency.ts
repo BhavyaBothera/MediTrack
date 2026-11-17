@@ -1,12 +1,15 @@
 import path from 'path';
 import dotenv from 'dotenv';
 import { supabaseAdmin, supabasePublic } from '../config/supabase';
+import { assertSafeExecutionEnvironment } from '../utils/environmentGuard';
 
 dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 
 const API_BASE = 'http://localhost:5000/api';
 
 async function runApiConcurrencySuite() {
+  assertSafeExecutionEnvironment('API Concurrency Test');
+
   console.log('========================================================================');
   console.log(' MEDITRACK – HTTP API CONCURRENCY & TRANSACTION INTEGRITY TEST SUITE');
   console.log('========================================================================\n');
@@ -24,22 +27,25 @@ async function runApiConcurrencySuite() {
     }
   }
 
-  // 1. SETUP: Create dedicated test patient & sign in to obtain valid JWT
-  console.log('--- 1. SETTING UP TEST PATIENT & OBTAINING REAL JWT TOKEN ---');
-  const testEmail = `api_concurrency_${Date.now()}@meditrack.local`;
-  const password = 'Password@123';
+  let patientId = '';
 
-  const { data: userAuth, error: authErr } = await supabaseAdmin.auth.admin.createUser({
-    email: testEmail,
-    password,
-    email_confirm: true,
-    user_metadata: { full_name: 'API Concurrency Patient', role: 'patient' }
-  });
+  try {
+    // 1. SETUP: Create dedicated test patient & sign in to obtain valid JWT
+    console.log('--- 1. SETTING UP TEST PATIENT & OBTAINING REAL JWT TOKEN ---');
+    const testEmail = `api_concurrency_${Date.now()}@meditrack.local`;
+    const password = 'Password@123';
 
-  const patientId = userAuth.user?.id;
-  if (!patientId) {
-    throw new Error(`Failed to create test user: ${authErr?.message}`);
-  }
+    const { data: userAuth, error: authErr } = await supabaseAdmin.auth.admin.createUser({
+      email: testEmail,
+      password,
+      email_confirm: true,
+      user_metadata: { full_name: 'API Concurrency Patient', role: 'patient' }
+    });
+
+    patientId = userAuth.user?.id || '';
+    if (!patientId) {
+      throw new Error(`Failed to create test user: ${authErr?.message}`);
+    }
 
   await supabaseAdmin.from('profiles').insert({
     id: patientId,
@@ -353,20 +359,23 @@ async function runApiConcurrencySuite() {
     dupDoseErr !== null && (dupDoseErr.code === '23505' || dupDoseErr.message.includes('unique constraint')),
     dupDoseErr?.message
   );
-
-  // -------------------------------------------------------------------------
-  // CLEANUP TEST FIXTURES
-  // -------------------------------------------------------------------------
-  console.log('\n--- 5. CLEANING UP TEST FIXTURES ---');
-  await supabaseAdmin.from('inventory_transactions').delete().eq('patient_id', patientId);
-  await supabaseAdmin.from('medication_logs').delete().eq('patient_id', patientId);
-  await supabaseAdmin.from('scheduled_doses').delete().eq('patient_id', patientId);
-  await supabaseAdmin.from('medication_schedules').delete().eq('patient_id', patientId);
-  await supabaseAdmin.from('medicine_inventory').delete().eq('patient_id', patientId);
-  await supabaseAdmin.from('medicines').delete().eq('patient_id', patientId);
-  await supabaseAdmin.from('profiles').delete().eq('id', patientId);
-  await supabaseAdmin.auth.admin.deleteUser(patientId);
-  console.log('Cleaned up dedicated API concurrency test fixtures.\n');
+  } finally {
+    // -------------------------------------------------------------------------
+    // CLEANUP TEST FIXTURES
+    // -------------------------------------------------------------------------
+    console.log('\n--- 5. CLEANING UP TEST FIXTURES ---');
+    if (patientId) {
+      await supabaseAdmin.from('inventory_transactions').delete().eq('patient_id', patientId);
+      await supabaseAdmin.from('medication_logs').delete().eq('patient_id', patientId);
+      await supabaseAdmin.from('scheduled_doses').delete().eq('patient_id', patientId);
+      await supabaseAdmin.from('medication_schedules').delete().eq('patient_id', patientId);
+      await supabaseAdmin.from('medicine_inventory').delete().eq('patient_id', patientId);
+      await supabaseAdmin.from('medicines').delete().eq('patient_id', patientId);
+      await supabaseAdmin.from('profiles').delete().eq('id', patientId);
+      await supabaseAdmin.auth.admin.deleteUser(patientId);
+      console.log('Cleaned up dedicated API concurrency test fixtures.\n');
+    }
+  }
 
   // -------------------------------------------------------------------------
   // SUMMARY

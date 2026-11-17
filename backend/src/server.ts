@@ -10,8 +10,56 @@ import { medicationScheduler } from './schedulers/medicationScheduler';
 
 const app = express();
 
-// Middlewares
-app.use(cors({ origin: true, credentials: true }));
+// Trust reverse proxy if explicitly enabled or in production
+if (env.TRUST_PROXY || env.NODE_ENV === 'production') {
+  app.set('trust proxy', 1);
+}
+
+// -----------------------------------------------------------------------------
+// CORS Security Configuration
+// -----------------------------------------------------------------------------
+const isProduction = env.NODE_ENV === 'production';
+
+// Explicit list of trusted origins
+const trustedOrigins: (string | RegExp)[] = [
+  env.FRONTEND_URL,
+  ...env.ALLOWED_ORIGINS,
+];
+
+// Permit localhost/127.0.0.1 development ports only when not in production
+if (!isProduction) {
+  trustedOrigins.push(/^http:\/\/(localhost|127\.0\.0\.1)(:[0-9]+)?$/);
+}
+
+export function isOriginAllowed(origin: string | undefined): boolean {
+  if (!origin) return true; // Direct non-browser calls (e.g. curl, tests, mobile SDK)
+  return trustedOrigins.some(allowed => {
+    if (typeof allowed === 'string') {
+      return allowed.toLowerCase() === origin.toLowerCase();
+    }
+    return allowed.test(origin);
+  });
+}
+
+// Strict CORS Middleware
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (isOriginAllowed(origin)) {
+        callback(null, true);
+      } else {
+        const corsError = new Error(`CORS Security Policy: Origin "${origin}" is not permitted.`);
+        (corsError as any).status = 403;
+        callback(corsError);
+      }
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-RateLimit-Limit', 'X-RateLimit-Remaining'],
+    maxAge: 86400,
+  })
+);
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(morgan('dev'));
@@ -25,6 +73,7 @@ app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
     service: 'MediTrack Backend API',
+    environment: env.NODE_ENV,
     timestamp: new Date().toISOString(),
     timezone: env.TIMEZONE,
     scheduler: 'active',

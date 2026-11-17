@@ -1,5 +1,6 @@
 import { supabaseAdmin } from '../config/supabase';
 import { inventoryService } from './inventoryService';
+import { scheduleService } from './scheduleService';
 import { Medicine, MedicineType, FoodTiming, Frequency } from '../types';
 
 export interface CreateMedicineDTO {
@@ -75,6 +76,10 @@ export class MedicineService {
       });
 
       await supabaseAdmin.from('medication_schedules').insert(scheduleRows);
+      // Immediately populate today's schedule for the newly configured medicine
+      await scheduleService.generateDailyDoses(patientId).catch(err => {
+        console.warn('[MedicineService] Warning generating today doses for new medicine:', err.message);
+      });
     }
 
     // 3. Initialize inventory
@@ -203,6 +208,10 @@ export class MedicineService {
       });
 
       await supabaseAdmin.from('medication_schedules').insert(newSchedules);
+      // Immediately sync today's schedule for updated medicine
+      await scheduleService.generateDailyDoses(existing.patient_id).catch(err => {
+        console.warn('[MedicineService] Warning syncing today doses on update:', err.message);
+      });
     }
 
     // Audit log

@@ -5,10 +5,13 @@ import { medicationScheduler } from '../schedulers/medicationScheduler';
 import { doseService } from '../services/doseService';
 import { scheduleService } from '../services/scheduleService';
 import { inventoryService } from '../services/inventoryService';
+import { assertSafeExecutionEnvironment } from '../utils/environmentGuard';
 
 dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 
 async function runSchedulerTestSuite() {
+  assertSafeExecutionEnvironment('Scheduler Automated Test Suite');
+
   console.log('===============================================================');
   console.log(' MEDITRACK SCHEDULER & NOTIFICATION AUTOMATED TEST SUITE');
   console.log('===============================================================');
@@ -61,9 +64,10 @@ async function runSchedulerTestSuite() {
   await inventoryService.getOrCreateInventory(testMed.id, patientId, 20, 5, 'capsules');
   console.log('✓ Test medicine and inventory initialized (Stock: 20)');
 
-  // -----------------------------------------------------------------
-  // SCENARIO A: Initial Reminder Trigger (scheduled_timestamp <= now)
-  // -----------------------------------------------------------------
+  try {
+    // -----------------------------------------------------------------
+    // SCENARIO A: Initial Reminder Trigger (scheduled_timestamp <= now)
+    // -----------------------------------------------------------------
   console.log('\n--- Testing Scenario A: Initial Reminder Delivery ---');
   const pastTime = new Date(Date.now() - 2 * 60 * 1000); // 2 minutes ago
   const schedTimeStr = pastTime.toISOString().slice(11, 19);
@@ -272,9 +276,13 @@ async function runSchedulerTestSuite() {
     console.error('✕ FAIL Scenario F: Non-idempotent dose generation:', gen2);
   }
 
-  // Cleanup test medicine
-  await supabaseAdmin.from('medicines').delete().eq('id', testMed.id);
-  console.log('\n✓ Cleaned up test medicine records.');
+  } finally {
+    // Cleanup test medicine in finally block so test data is never orphaned
+    if (testMed?.id) {
+      await supabaseAdmin.from('medicines').delete().eq('id', testMed.id);
+      console.log('\n✓ Cleaned up test medicine records (Finally Block).');
+    }
+  }
 
   console.log('===============================================================');
   console.log(' ALL 6 SCHEDULER & NOTIFICATION SCENARIOS PASSED (100% SUCCESS)');

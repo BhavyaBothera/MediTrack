@@ -1,10 +1,13 @@
 import path from 'path';
 import dotenv from 'dotenv';
 import { supabaseAdmin } from '../config/supabase';
+import { assertSafeExecutionEnvironment } from '../utils/environmentGuard';
 
 dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 
 async function cleanSlate() {
+  assertSafeExecutionEnvironment('Clean Slate Wipe');
+
   console.log('--- Cleaning Patient Medicines & Doses (Clean Slate Mode) ---');
 
   const patientEmail = 'patient@meditrack.local';

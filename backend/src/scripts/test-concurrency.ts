@@ -3,10 +3,13 @@ import dotenv from 'dotenv';
 import { supabaseAdmin } from '../config/supabase';
 import { doseService } from '../services/doseService';
 import { inventoryService } from '../services/inventoryService';
+import { assertSafeExecutionEnvironment } from '../utils/environmentGuard';
 
 dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 
 async function runConcurrencyAndIntegrityTests() {
+  assertSafeExecutionEnvironment('Database Concurrency Test');
+
   console.log('========================================================================');
   console.log(' MEDITRACK – INVENTORY CONCURRENCY & DATA INTEGRITY TEST SUITE');
   console.log('========================================================================\n');
@@ -24,20 +27,23 @@ async function runConcurrencyAndIntegrityTests() {
     }
   }
 
-  // 1. SETUP: Create a dedicated test patient, medicine, inventory & dose
-  console.log('--- 1. SETTING UP DEDICATED CONCURRENCY TEST FIXTURES ---');
-  const testEmail = `concurrency_test_${Date.now()}@meditrack.local`;
-  const { data: userAuth, error: authErr } = await supabaseAdmin.auth.admin.createUser({
-    email: testEmail,
-    password: 'Password@123',
-    email_confirm: true,
-    user_metadata: { full_name: 'Concurrency Test Patient', role: 'patient' }
-  });
+  let patientId = '';
 
-  const patientId = userAuth.user?.id;
-  if (!patientId) {
-    throw new Error(`Failed to create test user: ${authErr?.message}`);
-  }
+  try {
+    // 1. SETUP: Create a dedicated test patient, medicine, inventory & dose
+    console.log('--- 1. SETTING UP DEDICATED CONCURRENCY TEST FIXTURES ---');
+    const testEmail = `concurrency_test_${Date.now()}@meditrack.local`;
+    const { data: userAuth, error: authErr } = await supabaseAdmin.auth.admin.createUser({
+      email: testEmail,
+      password: 'Password@123',
+      email_confirm: true,
+      user_metadata: { full_name: 'Concurrency Test Patient', role: 'patient' }
+    });
+
+    patientId = userAuth.user?.id || '';
+    if (!patientId) {
+      throw new Error(`Failed to create test user: ${authErr?.message}`);
+    }
 
   await supabaseAdmin.from('profiles').insert({
     id: patientId,
@@ -244,20 +250,23 @@ async function runConcurrencyAndIntegrityTests() {
 
   console.log(`Stock level after deduction from 0: ${invAfterZero.current_stock}`);
   assert('Stock does not drop below 0 when exhausted (Clamped non-negative)', invAfterZero.current_stock === 0);
-
-  // -------------------------------------------------------------------------
-  // CLEANUP TEST FIXTURES
-  // -------------------------------------------------------------------------
-  console.log('\n--- 6. CLEANING UP TEST FIXTURES ---');
-  await supabaseAdmin.from('inventory_transactions').delete().eq('patient_id', patientId);
-  await supabaseAdmin.from('medication_logs').delete().eq('patient_id', patientId);
-  await supabaseAdmin.from('scheduled_doses').delete().eq('patient_id', patientId);
-  await supabaseAdmin.from('medication_schedules').delete().eq('patient_id', patientId);
-  await supabaseAdmin.from('medicine_inventory').delete().eq('patient_id', patientId);
-  await supabaseAdmin.from('medicines').delete().eq('patient_id', patientId);
-  await supabaseAdmin.from('profiles').delete().eq('id', patientId);
-  await supabaseAdmin.auth.admin.deleteUser(patientId);
-  console.log('Cleaned up dedicated concurrency test fixtures.\n');
+  } finally {
+    // -------------------------------------------------------------------------
+    // CLEANUP TEST FIXTURES
+    // -------------------------------------------------------------------------
+    console.log('\n--- 6. CLEANING UP TEST FIXTURES ---');
+    if (patientId) {
+      await supabaseAdmin.from('inventory_transactions').delete().eq('patient_id', patientId);
+      await supabaseAdmin.from('medication_logs').delete().eq('patient_id', patientId);
+      await supabaseAdmin.from('scheduled_doses').delete().eq('patient_id', patientId);
+      await supabaseAdmin.from('medication_schedules').delete().eq('patient_id', patientId);
+      await supabaseAdmin.from('medicine_inventory').delete().eq('patient_id', patientId);
+      await supabaseAdmin.from('medicines').delete().eq('patient_id', patientId);
+      await supabaseAdmin.from('profiles').delete().eq('id', patientId);
+      await supabaseAdmin.auth.admin.deleteUser(patientId);
+      console.log('Cleaned up dedicated concurrency test fixtures.\n');
+    }
+  }
 
   // -------------------------------------------------------------------------
   // SUMMARY

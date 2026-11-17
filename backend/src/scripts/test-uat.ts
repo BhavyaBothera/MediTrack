@@ -13,6 +13,7 @@ import { prescriptionService } from '../services/prescriptionService';
 import { notificationManager } from '../notifications/notificationManager';
 import { authorizePatientAccess } from '../middleware/rbac';
 import { medicationScheduler } from '../schedulers/medicationScheduler';
+import { assertSafeExecutionEnvironment } from '../utils/environmentGuard';
 
 dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 
@@ -38,6 +39,8 @@ function recordResult(section: string, testName: string, status: 'PASS' | 'FAIL'
 }
 
 async function runUAT() {
+  assertSafeExecutionEnvironment('UAT Test Suite');
+
   console.log('========================================================================');
   console.log(' MEDITRACK – FINAL USER ACCEPTANCE TEST (UAT) EXECUTION ENGINE');
   console.log('========================================================================\n');

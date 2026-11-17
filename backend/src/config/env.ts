@@ -8,6 +8,10 @@ export const env = {
   NODE_ENV: process.env.NODE_ENV || 'development',
   TIMEZONE: process.env.TIMEZONE || 'Asia/Kolkata',
   FRONTEND_URL: process.env.FRONTEND_URL || 'http://localhost:5000',
+  ALLOWED_ORIGINS: process.env.ALLOWED_ORIGINS
+    ? process.env.ALLOWED_ORIGINS.split(',').map(s => s.trim()).filter(Boolean)
+    : [],
+  TRUST_PROXY: process.env.TRUST_PROXY === 'true' || process.env.TRUST_PROXY === '1',
   
   // Supabase
   SUPABASE_URL: process.env.SUPABASE_URL || 'https://zadepztpubocvhjivlvj.supabase.co',
