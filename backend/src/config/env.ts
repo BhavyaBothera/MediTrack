@@ -17,7 +17,6 @@ export const env = {
   APPROVED_TEST_PROJECT_REF: process.env.APPROVED_TEST_PROJECT_REF || '',
   PRODUCTION_PROJECT_REF: process.env.PRODUCTION_PROJECT_REF || '',
   TEST_EXECUTION_AUTHORIZED: process.env.TEST_EXECUTION_AUTHORIZED === 'true',
-  ALLOW_TEST_MUTATIONS: process.env.ALLOW_TEST_MUTATIONS === 'true',
 
   // Supabase
   SUPABASE_URL: process.env.SUPABASE_URL || '',

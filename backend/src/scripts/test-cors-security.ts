@@ -250,10 +250,10 @@ async function runCorsAndSecurityTests() {
       `Error: ${unapprovedDbError}`
     );
 
-    // Test 3.4: Missing test authorization flag is blocked
+    // Test 3.4a: Missing test authorization flag is strictly blocked
     process.env.SUPABASE_URL = 'https://zadepztpubocvhjivlvj.supabase.co';
     delete process.env.TEST_EXECUTION_AUTHORIZED;
-    // ensure command line arguments don't contain --authorized
+    delete process.env.ALLOW_TEST_MUTATIONS;
     const origArgv = [...process.argv];
     process.argv = process.argv.filter(arg => arg !== '--authorized');
 
@@ -266,9 +266,44 @@ async function runCorsAndSecurityTests() {
       unauthorizedError = err.message;
     }
     assert(
-      'Missing TEST_EXECUTION_AUTHORIZED flag and missing --authorized CLI flag is strictly blocked',
-      unauthorizedBlocked && unauthorizedError.includes('require an explicit authorization flag'),
+      'Missing TEST_EXECUTION_AUTHORIZED flag is strictly blocked with [AUTHORIZATION REJECTION]',
+      unauthorizedBlocked && unauthorizedError.includes('[AUTHORIZATION REJECTION]'),
       `Error: ${unauthorizedError}`
+    );
+
+    // Test 3.4b: ALLOW_TEST_MUTATIONS=true alone CANNOT bypass authorization (P0-3)
+    process.env.ALLOW_TEST_MUTATIONS = 'true';
+    delete process.env.TEST_EXECUTION_AUTHORIZED;
+    let allowTestMutationsBlocked = false;
+    let allowTestMutationsError = '';
+    try {
+      assertSafeExecutionEnvironment('Attempted ALLOW_TEST_MUTATIONS Bypass');
+    } catch (err: any) {
+      allowTestMutationsBlocked = true;
+      allowTestMutationsError = err.message;
+    }
+    assert(
+      'ALLOW_TEST_MUTATIONS=true alone is strictly rejected with [AUTHORIZATION REJECTION]',
+      allowTestMutationsBlocked && allowTestMutationsError.includes('[AUTHORIZATION REJECTION]'),
+      `Error: ${allowTestMutationsError}`
+    );
+    delete process.env.ALLOW_TEST_MUTATIONS;
+
+    // Test 3.4c: --authorized CLI argument alone CANNOT bypass authorization (P0-3)
+    process.argv.push('--authorized');
+    delete process.env.TEST_EXECUTION_AUTHORIZED;
+    let cliFlagBlocked = false;
+    let cliFlagError = '';
+    try {
+      assertSafeExecutionEnvironment('Attempted CLI Flag Bypass');
+    } catch (err: any) {
+      cliFlagBlocked = true;
+      cliFlagError = err.message;
+    }
+    assert(
+      '--authorized CLI flag alone without TEST_EXECUTION_AUTHORIZED=true is strictly rejected with [AUTHORIZATION REJECTION]',
+      cliFlagBlocked && cliFlagError.includes('[AUTHORIZATION REJECTION]'),
+      `Error: ${cliFlagError}`
     );
     process.argv = origArgv;
 

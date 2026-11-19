@@ -47,7 +47,6 @@ export interface EnqueueOutboxParams {
 export class NotificationOutbox {
   private workerId: string;
   private inFlightEnqueueMutex: Map<string, Promise<{ outboxId: string; state: OutboxState; isDuplicate: boolean }>> = new Map();
-  private hasNativeIdempotencyColumn: boolean | null = null;
 
   constructor(customWorkerId?: string) {
     this.workerId = customWorkerId || `worker_${process.pid}_${Math.random().toString(36).substring(2, 9)}`;
@@ -77,8 +76,10 @@ export class NotificationOutbox {
    * 1. Uses a process-level in-flight promise mutex to coordinate concurrent enqueue calls within the node process.
    * 2. Enforces unique database constraints (PostgreSQL UNIQUE constraint or unique index on idempotency_key).
    * 3. Handles duplicate-key conflicts (Postgres error code 23505) safely by querying and returning the existing record
-   *    with `isDuplicate: true`.
-   * 4. Completely eliminates check-then-insert race conditions across concurrent workers.
+   *    by exact idempotency_key with `isDuplicate: true`.
+   * 4. If the database schema or cache lacks idempotency_key, refuses dispatch with [DATABASE MIGRATION REQUIRED].
+   *    Never silently falls back to unconstrained insertion.
+   * 5. Completely eliminates check-then-insert race conditions across concurrent workers.
    */
   async enqueue(params: EnqueueOutboxParams): Promise<{ outboxId: string; state: OutboxState; isDuplicate: boolean }> {
     const key = params.idempotencyKey;
@@ -111,25 +112,34 @@ export class NotificationOutbox {
     const nowIso = new Date().toISOString();
     const nextRetryAt = params.holdUntil ? params.holdUntil.toISOString() : nowIso;
 
-    // 1. First check if a log with this exact idempotency key already exists
-    // (covers re-enqueues after completion or from different sessions)
-    const { data: existingLogs } = await supabaseAdmin
+    // 1. Check if a delivery log with this exact idempotency key already exists
+    const { data: existingLog, error: checkErr } = await supabaseAdmin
       .from('notification_delivery_logs')
       .select('id, status, provider_response')
-      .eq('notification_id', params.notificationId)
-      .eq('channel', params.channel);
+      .eq('idempotency_key', params.idempotencyKey)
+      .maybeSingle();
 
-    if (existingLogs && existingLogs.length > 0) {
-      for (const log of existingLogs) {
-        const meta = log.provider_response as OutboxMetadata | null;
-        if (meta?.idempotency_key === params.idempotencyKey) {
-          return {
-            outboxId: log.id,
-            state: meta.outbox_state || (log.status === 'delivered' ? 'delivered' : 'queued'),
-            isDuplicate: true,
-          };
-        }
+    if (checkErr) {
+      if (
+        checkErr.code === '42703' ||
+        checkErr.code === 'PGRST204' ||
+        checkErr.message.includes('schema cache') ||
+        checkErr.message.includes('idempotency_key')
+      ) {
+        throw new Error(
+          `[DATABASE MIGRATION REQUIRED] Cannot enqueue notification: 'idempotency_key' column is missing or schema cache is stale. ` +
+          `External dispatch refused to prevent duplicate notification delivery. Detailed error: ${checkErr.message}`
+        );
       }
+    }
+
+    if (existingLog) {
+      const meta = existingLog.provider_response as OutboxMetadata | null;
+      return {
+        outboxId: existingLog.id,
+        state: meta?.outbox_state || (existingLog.status === 'delivered' ? 'delivered' : 'queued'),
+        isDuplicate: true,
+      };
     }
 
     const initialMetadata: OutboxMetadata = {
@@ -148,13 +158,10 @@ export class NotificationOutbox {
       status: 'pending',
       attempts: 0,
       provider_response: initialMetadata,
+      idempotency_key: params.idempotencyKey,
     };
 
-    if (this.hasNativeIdempotencyColumn !== false) {
-      insertPayload.idempotency_key = params.idempotencyKey;
-    }
-
-    // 2. Perform atomic insert
+    // 2. Perform atomic insert with database-enforced idempotency_key constraint
     const { data: inserted, error } = await supabaseAdmin
       .from('notification_delivery_logs')
       .insert(insertPayload)
@@ -170,61 +177,136 @@ export class NotificationOutbox {
         error.message.includes('duplicate key');
 
       if (isUniqueConflict) {
-        this.hasNativeIdempotencyColumn = true;
-        // Concurrent worker won race; safely retrieve the existing record
-        const { data: existingConflict } = await supabaseAdmin
+        // Concurrent worker won race; safely retrieve the existing record using exact idempotency_key
+        const { data: existingConflict, error: conflictErr } = await supabaseAdmin
           .from('notification_delivery_logs')
           .select('id, status, provider_response')
-          .eq('notification_id', params.notificationId)
-          .eq('channel', params.channel)
+          .eq('idempotency_key', params.idempotencyKey)
           .single();
 
-        if (existingConflict) {
-          const meta = existingConflict.provider_response as OutboxMetadata | null;
-          return {
-            outboxId: existingConflict.id,
-            state: meta?.outbox_state || (existingConflict.status === 'delivered' ? 'delivered' : 'queued'),
-            isDuplicate: true,
-          };
+        if (conflictErr || !existingConflict) {
+          throw new Error(
+            `Unique constraint violation occurred for idempotency_key "${params.idempotencyKey}", ` +
+            `but failed to retrieve conflicting record: ${conflictErr?.message || 'not found'}`
+          );
         }
+
+        const meta = existingConflict.provider_response as OutboxMetadata | null;
+        return {
+          outboxId: existingConflict.id,
+          state: meta?.outbox_state || (existingConflict.status === 'delivered' ? 'delivered' : 'queued'),
+          isDuplicate: true,
+        };
       }
 
-      // Postgres error 42703 / PostgREST PGRST204 = column does not exist in schema cache (migration pending)
+      // Postgres error 42703 / PostgREST PGRST204 = column does not exist or schema cache is stale
       if (
         (error.code === '42703' || error.code === 'PGRST204' || error.message.includes('schema cache')) &&
         error.message.includes('idempotency_key')
       ) {
-        this.hasNativeIdempotencyColumn = false;
-        delete insertPayload.idempotency_key;
-
-        const { data: fallbackInserted, error: fallbackErr } = await supabaseAdmin
-          .from('notification_delivery_logs')
-          .insert(insertPayload)
-          .select('id')
-          .single();
-
-        if (fallbackErr || !fallbackInserted) {
-          throw new Error(`Failed to enqueue outbox notification: ${fallbackErr?.message}`);
-        }
-
-        return {
-          outboxId: fallbackInserted.id,
-          state: 'queued',
-          isDuplicate: false,
-        };
+        throw new Error(
+          `[DATABASE MIGRATION REQUIRED] Cannot enqueue notification: 'idempotency_key' column is missing or schema cache is stale. ` +
+          `External dispatch refused to prevent duplicate notification delivery. Detailed error: ${error.message}`
+        );
       }
 
       throw new Error(`Failed to enqueue outbox notification: ${error.message}`);
-    }
-
-    if (this.hasNativeIdempotencyColumn === null) {
-      this.hasNativeIdempotencyColumn = true;
     }
 
     return {
       outboxId: inserted.id,
       state: 'queued',
       isDuplicate: false,
+    };
+  }
+
+  /**
+   * Atomically claims a single specific enqueued job for immediate processing (P0-2).
+   *
+   * Conditional Atomic Claim Requirements:
+   * 1. Matches row by id: outboxId.
+   * 2. Matches row status: 'pending'.
+   * 3. Matches expected idempotency_key.
+   * 4. Matches outbox_state: 'queued'.
+   * 5. Transitions outbox_state to 'processing', sets worker_id, claim_token, and processing_started_at.
+   * 6. Returns the claimed job record if exactly 1 row was updated; returns null if 0 rows matched (e.g. background worker claimed it first).
+   * 7. Propagates database errors.
+   */
+  async claimSingleJob(outboxId: string, expectedIdempotencyKey: string): Promise<any | null> {
+    const nowIso = new Date().toISOString();
+    const claimToken = crypto.randomUUID();
+
+    // 1. Fetch current job to get metadata and notification relation
+    const { data: job, error: fetchErr } = await supabaseAdmin
+      .from('notification_delivery_logs')
+      .select(`
+        id,
+        notification_id,
+        channel,
+        recipient_address,
+        status,
+        attempts,
+        provider_response,
+        notification:notifications (
+          id,
+          recipient_id,
+          patient_id,
+          type,
+          title,
+          message,
+          severity
+        )
+      `)
+      .eq('id', outboxId)
+      .eq('status', 'pending')
+      .maybeSingle();
+
+    if (fetchErr) {
+      throw new Error(`Database error fetching outbox job ${outboxId}: ${fetchErr.message}`);
+    }
+
+    if (!job) {
+      return null;
+    }
+
+    const meta = job.provider_response as OutboxMetadata | null;
+    if (!meta || meta.outbox_state !== 'queued' || meta.idempotency_key !== expectedIdempotencyKey) {
+      return null;
+    }
+
+    const updatedMeta: OutboxMetadata = {
+      ...meta,
+      outbox_state: 'processing',
+      processing_started_at: nowIso,
+      worker_id: this.workerId,
+      claim_token: claimToken,
+    };
+
+    // 2. Atomic conditional CAS update:
+    // Requires id, status: 'pending', exact idempotency_key, and outbox_state: 'queued'
+    const { data: claimed, error: claimErr } = await supabaseAdmin
+      .from('notification_delivery_logs')
+      .update({
+        provider_response: updatedMeta,
+      })
+      .eq('id', outboxId)
+      .eq('status', 'pending')
+      .eq('idempotency_key', expectedIdempotencyKey)
+      .contains('provider_response', { outbox_state: 'queued' })
+      .select('id');
+
+    if (claimErr) {
+      throw new Error(`Database error claiming outbox job ${outboxId}: ${claimErr.message}`);
+    }
+
+    if (!claimed || claimed.length === 0) {
+      // 0 rows updated means background worker or another process claimed it first
+      return null;
+    }
+
+    return {
+      ...job,
+      provider_response: updatedMeta,
     };
   }
 

@@ -358,48 +358,17 @@ export class NotificationManager {
           continue;
         }
 
-        // Atomically claim the enqueued job with a fencing token for immediate execution
-        const claimToken = crypto.randomUUID();
-        const workerId = notificationOutbox.getWorkerId();
-        const nowIso = new Date().toISOString();
-        const claimMeta = {
-          outbox_state: 'processing',
-          idempotency_key: idempotencyKey,
-          attempts: 0,
-          max_attempts: 3,
-          next_retry_at: nowIso,
-          processing_started_at: nowIso,
-          worker_id: workerId,
-          claim_token: claimToken,
-        };
+        // Atomically claim the enqueued job using conditional CAS before calling provider (P0-2)
+        const claimedJob = await notificationOutbox.claimSingleJob(outboxId, idempotencyKey);
+        if (!claimedJob) {
+          console.log(
+            `[NotificationManager] Job ${outboxId} was already claimed by background worker or another runner. ` +
+            `Skipping immediate provider dispatch to prevent duplicate external messages.`
+          );
+          continue;
+        }
 
-        await supabaseAdmin
-          .from('notification_delivery_logs')
-          .update({
-            provider_response: claimMeta,
-          })
-          .eq('id', outboxId);
-
-        const job = {
-          id: outboxId,
-          notification_id: notificationId,
-          channel,
-          recipient_address: recipientAddress,
-          status: 'pending',
-          attempts: 0,
-          provider_response: claimMeta,
-          notification: {
-            id: notificationId,
-            recipient_id: params.recipientId,
-            patient_id: params.patientId,
-            type: params.type,
-            title: params.title,
-            message: params.message,
-            severity,
-          },
-        };
-
-        const execResult = await notificationOutbox.executeJob(job, provider, preferences?.push_subscription);
+        const execResult = await notificationOutbox.executeJob(claimedJob, provider, preferences?.push_subscription);
         results.push(execResult);
       } catch (sendErr: any) {
         console.error(`[NotificationManager] Error processing outbox for ${channel}:`, sendErr.message);

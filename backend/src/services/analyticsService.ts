@@ -142,9 +142,12 @@ export class AnalyticsService {
 
   /**
    * Retrieves notification delivery metrics.
+   * Strictly scopes logs by patientId via notifications!inner(patient_id, recipient_id).
+   * Ensures patient analytics cannot include another patient's data (P1-4).
    * Strictly separates and filters out simulated test deliveries from verified live deliveries.
    */
   async getDeliveryAnalytics(patientId?: string): Promise<{
+    totalDeliveries: number;
     totalDeliberations: number;
     liveDeliveries: number;
     simulatedDeliveries: number;
@@ -152,12 +155,19 @@ export class AnalyticsService {
     pendingDeliveries: number;
     liveDeliveryRate: number;
   }> {
-    const { data: logs, error } = await supabaseAdmin
+    let query = supabaseAdmin
       .from('notification_delivery_logs')
-      .select('status, channel');
+      .select('status, channel, notification:notifications!inner(patient_id, recipient_id)');
+
+    if (patientId) {
+      query = query.eq('notification.patient_id', patientId);
+    }
+
+    const { data: logs, error } = await query;
 
     if (error || !logs) {
       return {
+        totalDeliveries: 0,
         totalDeliberations: 0,
         liveDeliveries: 0,
         simulatedDeliveries: 0,
@@ -184,11 +194,13 @@ export class AnalyticsService {
       }
     }
 
-    const totalDeliberations = logs.length;
+    const totalDeliveries = logs.length;
+    const totalDeliberations = totalDeliveries;
     const realAttempts = liveDeliveries + failedDeliveries;
     const liveDeliveryRate = realAttempts > 0 ? Math.round((liveDeliveries / realAttempts) * 100) : 100;
 
     return {
+      totalDeliveries,
       totalDeliberations,
       liveDeliveries,
       simulatedDeliveries,

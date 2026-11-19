@@ -16,3 +16,4 @@ ON public.notification_delivery_logs(idempotency_key);
 
 COMMENT ON COLUMN public.notification_delivery_logs.idempotency_key IS 
 'Unique, stable idempotency key preventing duplicate delivery job enqueue attempts across concurrent workers.';
+

@@ -3,6 +3,7 @@ import path from 'path';
 import { Client } from 'pg';
 import dotenv from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
+import { assertSafeExecutionEnvironment } from '../utils/environmentGuard';
 
 dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 
@@ -11,6 +12,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const DB_PASSWORD = process.env.DB_PASSWORD || process.env.SUPABASE_DB_PASSWORD || '';
 
 async function run() {
+  assertSafeExecutionEnvironment('Database Migration');
   console.log('--- Checking Supabase Database Status ---');
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 

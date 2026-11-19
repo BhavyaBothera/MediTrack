@@ -3,6 +3,7 @@ import { supabaseAdmin } from '../config/supabase';
 import { NotificationOutbox, notificationOutbox } from '../notifications/notificationOutbox';
 import { notificationManager, evaluateQuietHours } from '../notifications/notificationManager';
 import { NotificationProvider, NotificationPayload, DeliveryResult } from '../notifications/provider.interface';
+import { analyticsService } from '../services/analyticsService';
 
 assertSafeExecutionEnvironment('Notification Outbox & Quiet Hours Test Suite');
 
@@ -159,9 +160,9 @@ async function runNotificationOutboxTests() {
     console.log(`Isolated synthetic test patient: ${testEmail} (ID: ${patientId})\n`);
 
     // -------------------------------------------------------------------------
-    // 1. Defect 2: Real Database 20-Worker Concurrency Enqueue Test
+    // 1. Defect 2: Real Database 20-Worker Concurrency Enqueue Test Across Separate Instances
     // -------------------------------------------------------------------------
-    console.log('--- 1. DATABASE-ENFORCED OUTBOX IDEMPOTENCY: 20 CONCURRENT ENQUEUE CALLS ---');
+    console.log('--- 1. DATABASE-ENFORCED OUTBOX IDEMPOTENCY: 20 CONCURRENT ENQUEUE CALLS (SEPARATE INSTANCES) ---');
 
     const { data: notif1 } = await supabaseAdmin
       .from('notifications')
@@ -170,7 +171,7 @@ async function runNotificationOutboxTests() {
         patient_id: patientId,
         type: 'initial_reminder',
         title: 'Concurrent Enqueue Test',
-        message: 'Testing 20 simultaneous enqueue attempts for the exact same key',
+        message: 'Testing 20 simultaneous enqueue attempts across separate worker instances',
         severity: 'info',
         status: 'queued',
       })
@@ -182,17 +183,18 @@ async function runNotificationOutboxTests() {
 
     const concurrentKey = NotificationOutbox.generateIdempotencyKey('initial_reminder', patientId, doseId, 'email');
 
-    console.log(`Firing 20 simultaneous enqueue attempts with key: ${concurrentKey}`);
+    console.log(`Firing 20 simultaneous enqueue attempts across 20 SEPARATE NotificationOutbox instances with key: ${concurrentKey}`);
     const parallelCount = 20;
-    const enqueuePromises = Array.from({ length: parallelCount }, () =>
-      notificationOutbox.enqueue({
+    const workerInstances = Array.from({ length: parallelCount }, (_, i) => new NotificationOutbox(`separate_worker_${i}`));
+    const enqueuePromises = workerInstances.map(inst =>
+      inst.enqueue({
         notificationId: notifId1,
         channel: 'email',
         recipientId: patientId,
         patientId: patientId,
         type: 'initial_reminder',
         title: 'Concurrent Enqueue Test',
-        message: 'Testing 20 simultaneous enqueue attempts for the exact same key',
+        message: 'Testing 20 simultaneous enqueue attempts across separate worker instances',
         severity: 'info',
         recipientAddress: 'test_concurrent@example.com',
         idempotencyKey: concurrentKey,
@@ -207,17 +209,17 @@ async function runNotificationOutboxTests() {
     const uniqueOutboxIds = new Set(enqueueResults.map(r => r.outboxId));
 
     assert(
-      '20 concurrent enqueue attempts: Exactly 1 record created (isDuplicate: false)',
+      '20 concurrent separate-instance enqueue attempts: Exactly 1 record created (isDuplicate: false)',
       nonDuplicateCount === 1,
       `Expected nonDuplicateCount=1, got ${nonDuplicateCount}`
     );
     assert(
-      '20 concurrent enqueue attempts: Exactly 19 attempts detected as duplicate (isDuplicate: true)',
+      '20 concurrent separate-instance enqueue attempts: Exactly 19 attempts detected as duplicate (isDuplicate: true)',
       duplicateCount === 19,
       `Expected duplicateCount=19, got ${duplicateCount}`
     );
     assert(
-      '20 concurrent enqueue attempts: All 20 returned the exact same outboxId',
+      '20 concurrent separate-instance enqueue attempts: All 20 returned the exact same outboxId',
       uniqueOutboxIds.size === 1,
       `Expected 1 unique ID, got ${uniqueOutboxIds.size}`
     );
@@ -236,6 +238,56 @@ async function runNotificationOutboxTests() {
       'Database verification: Exactly 1 delivery log exists in database for this notification attempt',
       dbLogs?.length === 1,
       `Expected 1 DB row, found ${dbLogs?.length}`
+    );
+
+    // -------------------------------------------------------------------------
+    // 1.1 Defect 1: Missing Column / Schema Cache Refusal Test (P0-1)
+    // -------------------------------------------------------------------------
+    console.log('\n--- 1.1 TESTING MISSING COLUMN / SCHEMA CACHE REFUSAL (P0-1) ---');
+    const outboxSchemaTest = new NotificationOutbox('schema_cache_test_worker');
+    let schemaCacheErrorCaught = false;
+    let schemaCacheErrorMsg = '';
+
+    const origFrom = supabaseAdmin.from;
+    (supabaseAdmin as any).from = (table: string) => {
+      if (table === 'notification_delivery_logs') {
+        return {
+          select: () => ({
+            eq: () => ({
+              maybeSingle: async () => ({
+                data: null,
+                error: { code: 'PGRST204', message: 'Could not find the "idempotency_key" column in schema cache' }
+              })
+            })
+          })
+        };
+      }
+      return origFrom.call(supabaseAdmin, table);
+    };
+
+    try {
+      await outboxSchemaTest.enqueue({
+        notificationId: notifId1,
+        channel: 'email',
+        recipientId: patientId,
+        patientId: patientId,
+        type: 'schema_test',
+        title: 'Schema Test',
+        message: 'Testing schema refusal',
+        severity: 'info',
+        idempotencyKey: `schema:refusal:${Date.now()}`,
+      });
+    } catch (err: any) {
+      schemaCacheErrorCaught = true;
+      schemaCacheErrorMsg = err.message;
+    } finally {
+      (supabaseAdmin as any).from = origFrom;
+    }
+
+    assert(
+      'Missing column or stale schema cache error PGRST204 throws [DATABASE MIGRATION REQUIRED] and refuses external dispatch',
+      schemaCacheErrorCaught && schemaCacheErrorMsg.includes('[DATABASE MIGRATION REQUIRED]'),
+      `Error: ${schemaCacheErrorMsg}`
     );
 
     // -------------------------------------------------------------------------
@@ -278,6 +330,75 @@ async function runNotificationOutboxTests() {
       deliveredLog?.provider_response?.outbox_state === 'delivered' &&
       !!deliveredLog?.delivered_at
     );
+
+    // -------------------------------------------------------------------------
+    // 2.1 Immediate-Dispatch vs Background Worker Claim Race Test (P0-2)
+    // -------------------------------------------------------------------------
+    console.log('\n--- 2.1 TESTING IMMEDIATE-DISPATCH VS BACKGROUND WORKER CLAIM RACE (P0-2) ---');
+    const { data: notifRace } = await supabaseAdmin
+      .from('notifications')
+      .insert({
+        recipient_id: patientId,
+        patient_id: patientId,
+        type: 'initial_reminder',
+        title: 'Claim Race Test',
+        message: 'Testing simultaneous claim between background worker and immediate dispatch',
+        severity: 'info',
+        status: 'queued',
+      })
+      .select('id')
+      .single();
+
+    const notifRaceId = notifRace!.id;
+    createdNotificationIds.push(notifRaceId);
+
+    const raceKey = NotificationOutbox.generateIdempotencyKey('initial_reminder', patientId, 'race_dose_p02', 'email');
+    const workerBg = new NotificationOutbox('worker_bg_instance');
+    const workerImm = new NotificationOutbox('worker_imm_instance');
+
+    const raceEnqueue = await workerImm.enqueue({
+      notificationId: notifRaceId,
+      channel: 'email',
+      recipientId: patientId,
+      patientId: patientId,
+      type: 'initial_reminder',
+      title: 'Claim Race Test',
+      message: 'Testing simultaneous claim between background worker and immediate dispatch',
+      severity: 'info',
+      recipientAddress: 'test_race@example.com',
+      idempotencyKey: raceKey,
+      maxAttempts: 3,
+    });
+    createdOutboxIds.push(raceEnqueue.outboxId);
+
+    // Concurrently trigger background worker claimBatch and immediate dispatch claimSingleJob
+    console.log(`Racing workerBg.claimBatch vs workerImm.claimSingleJob for outboxId: ${raceEnqueue.outboxId}`);
+    const [bgClaims, immClaim] = await Promise.all([
+      workerBg.claimBatch(10),
+      workerImm.claimSingleJob(raceEnqueue.outboxId, raceKey),
+    ]);
+
+    const bgClaimedRaceJob = bgClaims.find(j => j.id === raceEnqueue.outboxId);
+    const immClaimedRaceJob = immClaim;
+
+    const bgWon = Boolean(bgClaimedRaceJob);
+    const immWon = Boolean(immClaimedRaceJob);
+
+    assert(
+      'Claim race: Exactly one worker wins the claim (bgWon XOR immWon)',
+      (bgWon && !immWon) || (!bgWon && immWon),
+      `bgWon=${bgWon}, immWon=${immWon}`
+    );
+
+    if (immWon) {
+      console.log('Immediate-dispatch worker won claim race. Completing job...');
+      const res = await workerImm.executeJob(immClaimedRaceJob, emailProvider);
+      assert('Immediate worker execution succeeds', res.success === true);
+    } else {
+      console.log('Background worker won claim race. Completing job...');
+      const res = await workerBg.executeJob(bgClaimedRaceJob, emailProvider);
+      assert('Background worker execution succeeds', res.success === true);
+    }
 
     // -------------------------------------------------------------------------
     // 3. Bounded Exponential Backoff & Dead Letter State Machine
@@ -661,6 +782,159 @@ async function runNotificationOutboxTests() {
       refreshedDose?.status === 'pending',
       `Dose status was: ${refreshedDose?.status}`
     );
+
+    // -------------------------------------------------------------------------
+    // 9. Multi-Patient Notification Delivery Analytics Isolation (P1-4)
+    // -------------------------------------------------------------------------
+    console.log('\n--- 9. MULTI-PATIENT NOTIFICATION ANALYTICS ISOLATION (P1-4) ---');
+
+    // Create authentic authenticated User Alpha
+    const { data: userAlpha, error: alphaAuthErr } = await supabaseAdmin.auth.admin.createUser({
+      email: `alpha_${timestamp}@meditrack.test`,
+      password: 'Password@123',
+      email_confirm: true,
+      user_metadata: { full_name: 'Patient Alpha', role: 'patient' },
+    });
+    if (alphaAuthErr || !userAlpha?.user?.id) {
+      throw new Error(`Failed to provision Patient Alpha for analytics isolation test: ${alphaAuthErr?.message}`);
+    }
+    const patientAlphaId = userAlpha.user.id;
+
+    await supabaseAdmin.from('profiles').insert({
+      id: patientAlphaId,
+      email: `alpha_${timestamp}@meditrack.test`,
+      full_name: 'Patient Alpha',
+      role: 'patient',
+    });
+
+    // Create authentic authenticated User Beta
+    const { data: userBeta, error: betaAuthErr } = await supabaseAdmin.auth.admin.createUser({
+      email: `beta_${timestamp}@meditrack.test`,
+      password: 'Password@123',
+      email_confirm: true,
+      user_metadata: { full_name: 'Patient Beta', role: 'patient' },
+    });
+
+    if (betaAuthErr || !userBeta?.user?.id) {
+      throw new Error(`Failed to provision Patient Beta for analytics isolation test: ${betaAuthErr?.message}`);
+    }
+    const patientBetaId = userBeta.user.id;
+
+    await supabaseAdmin.from('profiles').insert({
+      id: patientBetaId,
+      email: `beta_${timestamp}@meditrack.test`,
+      full_name: 'Patient Beta',
+      role: 'patient',
+    });
+
+    const { data: alphaNotif, error: alphaNotifErr } = await supabaseAdmin.from('notifications').insert({
+      recipient_id: patientAlphaId,
+      patient_id: patientAlphaId,
+      type: 'initial_reminder',
+      title: 'Alpha Reminder',
+      message: 'Alpha notification message',
+      status: 'delivered',
+    }).select('id').single();
+
+    if (alphaNotifErr || !alphaNotif) {
+      throw new Error(`Failed to create Alpha notification: ${alphaNotifErr?.message}`);
+    }
+
+    const { data: betaNotif1, error: betaNotif1Err } = await supabaseAdmin.from('notifications').insert({
+      recipient_id: patientBetaId,
+      patient_id: patientBetaId,
+      type: 'initial_reminder',
+      title: 'Beta Reminder 1',
+      message: 'Beta notification message 1',
+      status: 'delivered',
+    }).select('id').single();
+
+    if (betaNotif1Err || !betaNotif1) {
+      throw new Error(`Failed to create Beta notification 1: ${betaNotif1Err?.message}`);
+    }
+
+    const { data: betaNotif2, error: betaNotif2Err } = await supabaseAdmin.from('notifications').insert({
+      recipient_id: patientBetaId,
+      patient_id: patientBetaId,
+      type: 'follow_up_reminder',
+      title: 'Beta Reminder 2',
+      message: 'Beta notification message 2',
+      status: 'sent',
+    }).select('id').single();
+
+    if (betaNotif2Err || !betaNotif2) {
+      throw new Error(`Failed to create Beta notification 2: ${betaNotif2Err?.message}`);
+    }
+
+    const { error: logsInsertErr } = await supabaseAdmin.from('notification_delivery_logs').insert([
+      {
+        notification_id: alphaNotif.id,
+        channel: 'email',
+        recipient_address: 'alpha@meditrack.test',
+        status: 'delivered',
+        attempts: 1,
+        idempotency_key: `alpha:analytics:${timestamp}`,
+      },
+      {
+        notification_id: betaNotif1.id,
+        channel: 'sms',
+        recipient_address: '+15551234',
+        status: 'delivered',
+        attempts: 1,
+        idempotency_key: `beta:analytics:1:${timestamp}`,
+      },
+      {
+        notification_id: betaNotif2.id,
+        channel: 'email',
+        recipient_address: 'beta@meditrack.test',
+        status: 'simulated_test_mode',
+        attempts: 1,
+        idempotency_key: `beta:analytics:2:${timestamp}`,
+      },
+    ]);
+
+    if (logsInsertErr) {
+      throw new Error(`Failed to insert delivery logs for analytics test: ${logsInsertErr.message}`);
+    }
+
+    // Query analytics for Alpha
+    const alphaAnalytics = await analyticsService.getDeliveryAnalytics(patientAlphaId);
+    assert(
+      'Patient Alpha delivery analytics strictly returns Alpha delivery only (totalDeliveries = 1, live = 1, simulated = 0)',
+      alphaAnalytics.totalDeliveries === 1 &&
+      alphaAnalytics.totalDeliberations === 1 &&
+      alphaAnalytics.liveDeliveries === 1 &&
+      alphaAnalytics.simulatedDeliveries === 0,
+      `Alpha analytics: ${JSON.stringify(alphaAnalytics)}`
+    );
+
+    // Query analytics for Beta
+    const betaAnalytics = await analyticsService.getDeliveryAnalytics(patientBetaId);
+    assert(
+      'Patient Beta delivery analytics strictly returns Beta deliveries only (totalDeliveries = 2, live = 1, simulated = 1)',
+      betaAnalytics.totalDeliveries === 2 &&
+      betaAnalytics.totalDeliberations === 2 &&
+      betaAnalytics.liveDeliveries === 1 &&
+      betaAnalytics.simulatedDeliveries === 1,
+      `Beta analytics: ${JSON.stringify(betaAnalytics)}`
+    );
+
+    // Query analytics for non-existent patient
+    const nonExistentPatientAnalytics = await analyticsService.getDeliveryAnalytics(crypto.randomUUID());
+    assert(
+      'Non-existent patient returns exactly 0 deliveries in scoped analytics',
+      nonExistentPatientAnalytics.totalDeliveries === 0 &&
+      nonExistentPatientAnalytics.totalDeliberations === 0 &&
+      nonExistentPatientAnalytics.liveDeliveries === 0,
+      `Non-existent analytics: ${JSON.stringify(nonExistentPatientAnalytics)}`
+    );
+
+    // Cleanup Alpha and Beta
+    await supabaseAdmin.from('notification_delivery_logs').delete().in('notification_id', [alphaNotif.id, betaNotif1.id, betaNotif2.id]);
+    await supabaseAdmin.from('notifications').delete().in('id', [alphaNotif.id, betaNotif1.id, betaNotif2.id]);
+    await supabaseAdmin.from('profiles').delete().in('id', [patientAlphaId, patientBetaId]);
+    await supabaseAdmin.auth.admin.deleteUser(patientAlphaId);
+    await supabaseAdmin.auth.admin.deleteUser(patientBetaId);
 
   } finally {
     // -------------------------------------------------------------------------

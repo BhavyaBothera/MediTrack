@@ -20,6 +20,20 @@ export class AnalyticsController {
     }
   }
 
+  async getDeliveryMetrics(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const patientId = (req.query.patientId as string) || req.user!.id;
+
+      const authorized = await authorizePatientAccess(req, res, () => {}, patientId);
+      if (!authorized) return;
+
+      const delivery = await analyticsService.getDeliveryAnalytics(patientId);
+      res.json({ success: true, delivery });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  }
+
   async exportCSV(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const patientId = (req.query.patientId as string) || req.user!.id;

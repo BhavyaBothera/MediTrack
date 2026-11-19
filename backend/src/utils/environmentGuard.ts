@@ -41,17 +41,15 @@ export function assertSafeExecutionEnvironment(operationName: string): void {
     throw new Error(errorMsg);
   }
 
-  // 2. Require explicit test authorization flag
-  const isExplicitlyAuthorized =
-    process.env.TEST_EXECUTION_AUTHORIZED === 'true' ||
-    process.env.ALLOW_TEST_MUTATIONS === 'true' ||
-    process.argv.includes('--authorized');
+  // 2. Require explicit operator authorization flag (TEST_EXECUTION_AUTHORIZED=true)
+  const isExplicitlyAuthorized = process.env.TEST_EXECUTION_AUTHORIZED === 'true';
 
   if (!isExplicitlyAuthorized) {
     const errorMsg =
       `[AUTHORIZATION REJECTION] Operation "${operationName}" was blocked! ` +
       `Test and destructive operations require an explicit authorization flag ` +
-      `(TEST_EXECUTION_AUTHORIZED=true or --authorized).`;
+      `(TEST_EXECUTION_AUTHORIZED=true). Passing alternate flags or CLI arguments ` +
+      `is strictly rejected by MediTrack security policy.`;
     console.error(`\n🚨 ${errorMsg}\n`);
     throw new Error(errorMsg);
   }
