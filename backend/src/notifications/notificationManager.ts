@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { supabaseAdmin } from '../config/supabase';
 import { InAppProvider } from './inAppProvider';
 import { EmailProvider } from './emailProvider';
@@ -357,7 +358,28 @@ export class NotificationManager {
           continue;
         }
 
-        // Claim and execute immediately
+        // Atomically claim the enqueued job with a fencing token for immediate execution
+        const claimToken = crypto.randomUUID();
+        const workerId = notificationOutbox.getWorkerId();
+        const nowIso = new Date().toISOString();
+        const claimMeta = {
+          outbox_state: 'processing',
+          idempotency_key: idempotencyKey,
+          attempts: 0,
+          max_attempts: 3,
+          next_retry_at: nowIso,
+          processing_started_at: nowIso,
+          worker_id: workerId,
+          claim_token: claimToken,
+        };
+
+        await supabaseAdmin
+          .from('notification_delivery_logs')
+          .update({
+            provider_response: claimMeta,
+          })
+          .eq('id', outboxId);
+
         const job = {
           id: outboxId,
           notification_id: notificationId,
@@ -365,14 +387,7 @@ export class NotificationManager {
           recipient_address: recipientAddress,
           status: 'pending',
           attempts: 0,
-          provider_response: {
-            outbox_state: 'processing',
-            idempotency_key: idempotencyKey,
-            attempts: 0,
-            max_attempts: 3,
-            next_retry_at: new Date().toISOString(),
-            worker_id: 'immediate_dispatch',
-          },
+          provider_response: claimMeta,
           notification: {
             id: notificationId,
             recipient_id: params.recipientId,
@@ -397,9 +412,15 @@ export class NotificationManager {
       }
     }
 
-    // Update overall notification status in database
-    const anyDelivered = results.some(r => r.success);
-    const finalStatus = anyDelivered ? 'delivered' : (hasHeld ? 'queued' : 'failed');
+    // Update overall notification status in database:
+    // - Confirmed LIVE external delivery sets parent notification to 'delivered'
+    // - Simulated external test mode or in-app only sets parent notification to 'sent' (NOT 'delivered')
+    // - If all attempts failed, set to 'failed'
+    // - If items held for quiet hours, set to 'queued'
+    const hasLiveExternal = results.some(r => r.channel !== 'in_app' && r.success && !r.isTestMode);
+    const anySuccess = results.some(r => r.success);
+    const finalStatus = hasLiveExternal ? 'delivered' : (hasHeld ? 'queued' : (anySuccess ? 'sent' : 'failed'));
+
     await supabaseAdmin
       .from('notifications')
       .update({ status: finalStatus })

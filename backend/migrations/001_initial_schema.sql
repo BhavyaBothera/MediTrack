@@ -376,10 +376,12 @@ CREATE TABLE IF NOT EXISTS public.notification_delivery_logs (
     error_message TEXT,
     provider_response JSONB,
     delivered_at TIMESTAMPTZ,
+    idempotency_key TEXT UNIQUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_deliv_logs_notif ON public.notification_delivery_logs(notification_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_deliv_logs_idempotency ON public.notification_delivery_logs(idempotency_key);
 
 -- --------------------------------------------------------------------
 -- 16. AUDIT LOGS

@@ -288,12 +288,54 @@ async function runCorsAndSecurityTests() {
       prodEnvBlocked && prodEnvError.includes('NODE_ENV=production'),
       `Error: ${prodEnvError}`
     );
+
+    // Test 3.6: Missing APPROVED_TEST_PROJECT_REF fails closed
+    process.env.NODE_ENV = 'development';
+    process.env.SUPABASE_URL = 'https://zadepztpubocvhjivlvj.supabase.co';
+    process.env.TEST_EXECUTION_AUTHORIZED = 'true';
+    delete process.env.APPROVED_TEST_PROJECT_REF;
+    (env as any).APPROVED_TEST_PROJECT_REF = '';
+
+    let missingApprovedRefBlocked = false;
+    let missingApprovedRefError = '';
+    try {
+      assertSafeExecutionEnvironment('Missing Approved Ref Test');
+    } catch (err: any) {
+      missingApprovedRefBlocked = true;
+      missingApprovedRefError = err.message;
+    }
+    assert(
+      'Missing APPROVED_TEST_PROJECT_REF fails closed with configuration rejection',
+      missingApprovedRefBlocked && missingApprovedRefError.includes('APPROVED_TEST_PROJECT_REF is not configured'),
+      `Error: ${missingApprovedRefError}`
+    );
+
+    // Test 3.7: Missing SUPABASE_URL fails closed
+    process.env.APPROVED_TEST_PROJECT_REF = 'zadepztpubocvhjivlvj';
+    delete process.env.SUPABASE_URL;
+    (env as any).SUPABASE_URL = '';
+
+    let missingUrlBlocked = false;
+    let missingUrlError = '';
+    try {
+      assertSafeExecutionEnvironment('Missing Supabase URL Test');
+    } catch (err: any) {
+      missingUrlBlocked = true;
+      missingUrlError = err.message;
+    }
+    assert(
+      'Missing SUPABASE_URL fails closed with configuration rejection',
+      missingUrlBlocked && missingUrlError.includes('SUPABASE_URL is not configured'),
+      `Error: ${missingUrlError}`
+    );
   } finally {
     process.env.NODE_ENV = savedNodeEnv;
     process.env.SUPABASE_URL = savedUrl;
+    (env as any).SUPABASE_URL = savedUrl;
     process.env.TEST_EXECUTION_AUTHORIZED = savedTestAuth;
     process.env.PRODUCTION_PROJECT_REF = savedProdRef;
     process.env.APPROVED_TEST_PROJECT_REF = savedTestRef;
+    (env as any).APPROVED_TEST_PROJECT_REF = savedTestRef;
   }
 
   // -------------------------------------------------------------------------

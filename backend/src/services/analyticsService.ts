@@ -139,6 +139,64 @@ export class AnalyticsService {
       medicineBreakdown,
     };
   }
+
+  /**
+   * Retrieves notification delivery metrics.
+   * Strictly separates and filters out simulated test deliveries from verified live deliveries.
+   */
+  async getDeliveryAnalytics(patientId?: string): Promise<{
+    totalDeliberations: number;
+    liveDeliveries: number;
+    simulatedDeliveries: number;
+    failedDeliveries: number;
+    pendingDeliveries: number;
+    liveDeliveryRate: number;
+  }> {
+    const { data: logs, error } = await supabaseAdmin
+      .from('notification_delivery_logs')
+      .select('status, channel');
+
+    if (error || !logs) {
+      return {
+        totalDeliberations: 0,
+        liveDeliveries: 0,
+        simulatedDeliveries: 0,
+        failedDeliveries: 0,
+        pendingDeliveries: 0,
+        liveDeliveryRate: 0,
+      };
+    }
+
+    let liveDeliveries = 0;
+    let simulatedDeliveries = 0;
+    let failedDeliveries = 0;
+    let pendingDeliveries = 0;
+
+    for (const log of logs) {
+      if (log.status === 'delivered') {
+        liveDeliveries++;
+      } else if (log.status === 'simulated_test_mode') {
+        simulatedDeliveries++;
+      } else if (log.status === 'failed') {
+        failedDeliveries++;
+      } else if (log.status === 'pending') {
+        pendingDeliveries++;
+      }
+    }
+
+    const totalDeliberations = logs.length;
+    const realAttempts = liveDeliveries + failedDeliveries;
+    const liveDeliveryRate = realAttempts > 0 ? Math.round((liveDeliveries / realAttempts) * 100) : 100;
+
+    return {
+      totalDeliberations,
+      liveDeliveries,
+      simulatedDeliveries,
+      failedDeliveries,
+      pendingDeliveries,
+      liveDeliveryRate,
+    };
+  }
 }
 
 export const analyticsService = new AnalyticsService();

@@ -181,23 +181,46 @@ export const notificationsPage = {
         const iconClass = isCritical ? 'notif-critical' : isWarning ? 'notif-warning' : 'notif-info';
         const icon = isCritical ? '🚨' : isWarning ? '⚠️' : '🔔';
 
+        // Render accurate channel delivery pills
+        const logs = n.delivery_logs || [];
+        const channelPillsHtml = logs.map(l => {
+          if (l.channel === 'in_app') {
+            return `<span style="background:#eff6ff; color:#1d4ed8; border:1px solid #bfdbfe; font-size:10px; padding:2px 6px; border-radius:4px; font-weight:600; margin-right:4px;">In-App: Saved</span>`;
+          }
+          if (l.status === 'simulated_test_mode' || l.is_simulated) {
+            return `<span style="background:#f1f5f9; color:#475569; border:1px solid #cbd5e1; font-size:10px; padding:2px 6px; border-radius:4px; font-weight:600; margin-right:4px;">${l.channel.toUpperCase()}: SIMULATED</span>`;
+          }
+          if (l.status === 'delivered') {
+            return `<span style="background:#ecfdf5; color:#047857; border:1px solid #a7f3d0; font-size:10px; padding:2px 6px; border-radius:4px; font-weight:600; margin-right:4px;">${l.channel.toUpperCase()}: LIVE</span>`;
+          }
+          if (l.status === 'failed') {
+            return `<span style="background:#fef2f2; color:#b91c1c; border:1px solid #fecaca; font-size:10px; padding:2px 6px; border-radius:4px; font-weight:600; margin-right:4px;">${l.channel.toUpperCase()}: FAILED</span>`;
+          }
+          return `<span style="background:#fffbeb; color:#b45309; border:1px solid #fde68a; font-size:10px; padding:2px 6px; border-radius:4px; font-weight:600; margin-right:4px;">${l.channel.toUpperCase()}: PENDING</span>`;
+        }).join('');
+
         html += `
           <div class="notification-item ${!n.is_read ? 'unread' : ''}">
             <div class="notification-icon ${iconClass}">${icon}</div>
             <div style="flex:1;">
               <div style="display:flex; justify-content:space-between; align-items:flex-start;">
-                <h4 style="font-size:14px; font-weight:700; color:var(--text-primary);">${n.title}</h4>
+                <div style="display:flex; align-items:center; flex-wrap:wrap; gap:4px;">
+                  <h4 style="font-size:14px; font-weight:700; color:var(--text-primary); margin:0;">${n.title}</h4>
+                  ${n.is_simulated ? `<span style="font-size:10px; background:#f1f5f9; color:#64748b; padding:1px 5px; border-radius:3px; font-weight:600; border:1px solid #e2e8f0;">[SIMULATED TEST ALERT]</span>` : ''}
+                </div>
                 <span style="font-size:11px; color:var(--text-muted);">${new Date(n.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
               </div>
               <p style="font-size:13px; color:var(--text-secondary); margin-top:4px; line-height:1.4;">${n.message}</p>
               
-              <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px; font-size:11px; color:var(--text-muted);">
-                <span>Channel Logs: ${n.delivery_logs?.length || 1} delivery attempted</span>
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px; font-size:11px; color:var(--text-muted); flex-wrap:wrap; gap:8px;">
+                <div style="display:flex; align-items:center; flex-wrap:wrap; gap:4px;">
+                  ${channelPillsHtml || `<span>Channel Logs: ${logs.length || 1} delivery attempted</span>`}
+                </div>
                 ${!n.is_read ? `
                   <button class="btn btn-outline btn-sm btn-mark-read" data-id="${n.id}" style="padding:2px 8px; font-size:11px;">
                     Mark as Read
                   </button>
-                ` : '<span style="color:var(--emerald-600);">✓ Read</span>'}
+                ` : '<span style="color:var(--emerald-600); font-weight:600;">✓ Read</span>'}
               </div>
             </div>
           </div>

@@ -14,13 +14,13 @@ export const env = {
   TRUST_PROXY: process.env.TRUST_PROXY || '',
   
   // Database Environment Isolation
-  APPROVED_TEST_PROJECT_REF: process.env.APPROVED_TEST_PROJECT_REF || 'zadepztpubocvhjivlvj',
+  APPROVED_TEST_PROJECT_REF: process.env.APPROVED_TEST_PROJECT_REF || '',
   PRODUCTION_PROJECT_REF: process.env.PRODUCTION_PROJECT_REF || '',
   TEST_EXECUTION_AUTHORIZED: process.env.TEST_EXECUTION_AUTHORIZED === 'true',
   ALLOW_TEST_MUTATIONS: process.env.ALLOW_TEST_MUTATIONS === 'true',
 
   // Supabase
-  SUPABASE_URL: process.env.SUPABASE_URL || 'https://zadepztpubocvhjivlvj.supabase.co',
+  SUPABASE_URL: process.env.SUPABASE_URL || '',
   SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY || '',
   SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY || '',
   SUPABASE_SECRET_KEY: process.env.SUPABASE_SECRET_KEY || '',

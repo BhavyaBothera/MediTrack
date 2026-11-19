@@ -56,14 +56,46 @@ export function assertSafeExecutionEnvironment(operationName: string): void {
     throw new Error(errorMsg);
   }
 
-  // 3 & 4. Validate target database project reference
+  // 3 & 4. Validate target database configuration and project reference
   const targetUrl = process.env.SUPABASE_URL || env.SUPABASE_URL;
-  const currentProjectRef = extractProjectRef(targetUrl);
+  if (!targetUrl || targetUrl.trim() === '') {
+    const errorMsg =
+      `[CONFIGURATION REJECTION] Operation "${operationName}" was blocked! ` +
+      `SUPABASE_URL is not configured. Test and destructive operations require an explicit target database URL.`;
+    console.error(`\n🚨 ${errorMsg}\n`);
+    throw new Error(errorMsg);
+  }
 
-  const approvedRefs = (process.env.APPROVED_TEST_PROJECT_REF || env.APPROVED_TEST_PROJECT_REF || 'zadepztpubocvhjivlvj')
+  const currentProjectRef = extractProjectRef(targetUrl);
+  if (!currentProjectRef) {
+    const errorMsg =
+      `[CONFIGURATION REJECTION] Operation "${operationName}" was blocked! ` +
+      `Unable to extract valid project reference from SUPABASE_URL ("${targetUrl}"). Execution blocked.`;
+    console.error(`\n🚨 ${errorMsg}\n`);
+    throw new Error(errorMsg);
+  }
+
+  const rawApprovedRefs = process.env.APPROVED_TEST_PROJECT_REF || env.APPROVED_TEST_PROJECT_REF || '';
+  if (!rawApprovedRefs || rawApprovedRefs.trim() === '') {
+    const errorMsg =
+      `[CONFIGURATION REJECTION] Operation "${operationName}" was blocked! ` +
+      `APPROVED_TEST_PROJECT_REF is not configured. Refusing to execute without an explicit approved test database identifier.`;
+    console.error(`\n🚨 ${errorMsg}\n`);
+    throw new Error(errorMsg);
+  }
+
+  const approvedRefs = rawApprovedRefs
     .split(',')
     .map(s => s.trim().toLowerCase())
     .filter(Boolean);
+
+  if (approvedRefs.length === 0) {
+    const errorMsg =
+      `[CONFIGURATION REJECTION] Operation "${operationName}" was blocked! ` +
+      `No valid project references found in APPROVED_TEST_PROJECT_REF. Execution blocked.`;
+    console.error(`\n🚨 ${errorMsg}\n`);
+    throw new Error(errorMsg);
+  }
 
   const productionRefs = (process.env.PRODUCTION_PROJECT_REF || env.PRODUCTION_PROJECT_REF || '')
     .split(',')
@@ -80,8 +112,8 @@ export function assertSafeExecutionEnvironment(operationName: string): void {
     throw new Error(errorMsg);
   }
 
-  // Target must be in approved test list
-  if (!currentProjectRef || !approvedRefs.includes(currentProjectRef.toLowerCase())) {
+  // Target must strictly match approved test list
+  if (!approvedRefs.includes(currentProjectRef.toLowerCase())) {
     const errorMsg =
       `[DATABASE TARGET REJECTION] Operation "${operationName}" was blocked! ` +
       `Database project "${currentProjectRef || 'unknown'}" is NOT in the approved test database list ` +

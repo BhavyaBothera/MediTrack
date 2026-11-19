@@ -17,7 +17,30 @@ export class NotificationController {
         .limit(50);
 
       if (error) throw error;
-      res.json({ success: true, notifications: data || [] });
+
+      // Accurately enrich notifications and delivery logs with simulated vs live status
+      const notifications = (data || []).map((n: any) => {
+        const logs = (n.delivery_logs || []).map((log: any) => ({
+          ...log,
+          is_simulated: log.status === 'simulated_test_mode' || Boolean(log.provider_response?.isTestMode),
+        }));
+
+        const hasLiveExternal = logs.some((l: any) => l.channel !== 'in_app' && l.status === 'delivered' && !l.is_simulated);
+        const hasSimulatedExternal = logs.some((l: any) => l.is_simulated);
+
+        return {
+          ...n,
+          delivery_logs: logs,
+          is_simulated: hasSimulatedExternal && !hasLiveExternal,
+          external_delivery_status: hasLiveExternal
+            ? 'delivered'
+            : (hasSimulatedExternal
+              ? 'simulated_test_mode'
+              : (logs.some((l: any) => l.status === 'failed') ? 'failed' : 'pending')),
+        };
+      });
+
+      res.json({ success: true, notifications });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
     }
